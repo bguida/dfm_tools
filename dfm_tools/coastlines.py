@@ -5,6 +5,7 @@ import pandas as pd
 import datetime as dt
 from dfm_tools.data import gshhs_coastlines_shp
 import hydrolib.core.dflowfm as hcdfm
+from shapely.geometry import LineString
 
 __all__ = ["get_coastlines_gdb",
            "get_coastlines_ldb",
