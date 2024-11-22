@@ -10,11 +10,32 @@ __all__ = ["get_coastlines_gdb",
            "get_coastlines_ldb",
            "plot_coastlines",
            "plot_coastlines_ldb",
+           "PolyFile_to_geodataframe_linestrings",
            "get_borders_gdb",
            "plot_borders",
     ]
 
+def PolyFile_to_geodataframe_linestrings(polyfile_object, crs=None):
+    """
+    empty docstring
+    """
+    plilines_list = []
+    plinames_list = []
+    pliz_list = []
+    plidata_list = [] #TODO: make more generic with polyobject_pd.columns or earlier
+    for iPO, polyline_object in enumerate(polyfile_object.objects):
+        polyobject_pd = pd.DataFrame([dict(p) for p in polyline_object.points]) #TODO: getting only x/y might be faster, but maybe we also need the other columns like z/n/data?
+        polygon_geom = LineString(zip(polyobject_pd['x'],polyobject_pd['y']))
 
+        #make gdf of points (1 point per row)
+        plilines_list.append(polygon_geom)
+        plinames_list.append(polyline_object.metadata.name)
+        pliz_list.append(polyobject_pd['z'].tolist())
+        plidata_list.append(polyobject_pd['data'].tolist())
+
+    gdf_polyfile = geopandas.GeoDataFrame({'name':plinames_list, 'z':pliz_list, 'data':plidata_list, 'geometry':plilines_list}, crs=crs)
+    return gdf_polyfile
+    
 def bbox_convert_crs(bbox, crs):
     """
     convert bbox from input crs to WGS84
