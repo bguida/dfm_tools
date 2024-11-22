@@ -2,6 +2,7 @@ import os
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import pandas as pd
+import geopandas
 import datetime as dt
 from dfm_tools.data import gshhs_coastlines_shp
 import hydrolib.core.dflowfm as hcdfm
