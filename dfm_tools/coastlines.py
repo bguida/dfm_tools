@@ -152,7 +152,7 @@ def get_coastlines_ldb(ldb_dir:str = None, bbox:tuple = (-180, -90, 180, 90), mi
     if crs:
         coastlines_gdb = gdf_polyfile.to_crs(crs)
     
-    return coastlines_gdb
+    return coastlines_ldb
 
 def get_borders_gdb(res:str='h', bbox:tuple = (-180, -90, 180, 90), crs:str = None) -> gpd.geoseries.GeoSeries:
     """
