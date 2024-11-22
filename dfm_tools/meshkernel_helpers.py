@@ -405,7 +405,7 @@ def generate_bndpli_cutland(mk:meshkernel.MeshKernel, res:str='f', min_area:floa
     bnd_gdf.crs = coastlines_gdf.crs
     return bnd_gdf
 
-def generate_bndpli_cutland_ldb(ldb_dir:str = None, mk:meshkernel.MeshKernel, min_area:float = 0, crs:(int,str) = None, buffer:float = 0):
+def generate_bndpli_cutland_ldb(mk:meshkernel.MeshKernel, ldb_dir:str = None,min_area:float = 0, crs:(int,str) = None, buffer:float = 0):
     """
     Generate a boundary polyline from the meshkernel object and cut away the landward part.
     Be sure to do this on the base/refined grid, not on the grid where the landward cells were already cut.
