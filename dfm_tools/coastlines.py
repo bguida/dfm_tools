@@ -6,7 +6,9 @@ import datetime as dt
 from dfm_tools.data import gshhs_coastlines_shp
 
 __all__ = ["get_coastlines_gdb",
+           "get_coastlines_ldb",
            "plot_coastlines",
+           "plot_coastlines_ldb",
            "get_borders_gdb",
            "plot_borders",
     ]
@@ -84,6 +86,49 @@ def get_coastlines_gdb(res:str='h', bbox:tuple = (-180, -90, 180, 90), min_area:
     
     return coastlines_gdb
 
+def get_coastlines_ldb(ldb_dir:str = None, bbox:tuple = (-180, -90, 180, 90), min_area:float = 0, crs:str = None, columns:list = ['area']) -> gpd.geoseries.GeoSeries:
+    """
+    GSHHS coastlines: https://www.ngdc.noaa.gov/mgg/shorelines/data/gshhg/latest/readme.txt
+    geopandas docs https://geopandas.org/en/stable/docs/reference/api/geopandas.read_file.html
+    
+    Parameters
+    ----------
+    bbox : tuple, optional
+        (minx, miny, maxx, maxy), also includes shapes that are partly in the bbox. The default is (-180, -90, 180, 90).
+    min_area : float, optional
+        in km2, min_area>0 speeds up process. The default is 0.
+    crs : str, optional
+        coordinate reference system
+    columns : list, optional
+        which shapefile columns to include, None gives all. The default is ['area'].
+
+    Returns
+    -------
+    coastlines_gdb : TYPE
+        DESCRIPTION.
+
+    """
+    
+    if crs is not None:
+        bbox = bbox_convert_crs(bbox, crs)
+        
+    # pick ldb file from ldb_dir 
+    dir_gshhs = ldb_dir
+    print(dir_gshhs)
+    #use htdrolib-core for reading ldb
+    file_ldb = r'C:\Users\bguid\OneDrive\Documents\Lavori\2023\PhD_Enea\work\Delft\Coastline\spezia_merged_final_gui.ldb'
+    print('>> reading coastlines: ',end='')
+    dtstart = dt.datetime.now()
+    
+    polyfile_object = hcdfm.PolyFile(file_ldb)
+    gdf_polyfile = dfmt.PolyFile_to_geodataframe_linestrings(polyfile_object,crs=crs)
+
+    print(f'{(dt.datetime.now()-dtstart).total_seconds():.2f} sec')
+    
+    if crs:
+        coastlines_gdb = gdf_polyfile.to_crs(crs)
+    
+    return coastlines_gdb
 
 def get_borders_gdb(res:str='h', bbox:tuple = (-180, -90, 180, 90), crs:str = None) -> gpd.geoseries.GeoSeries:
     """
@@ -156,6 +201,34 @@ def plot_coastlines(ax=None, res:str='h', min_area:float = 0, crs=None, **kwargs
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
 
+def plot_coastlines_ldb(ldb_dir:str = None, ax=None, res:str='h', min_area:float = 0, crs=None, **kwargs):
+    """
+    get coastlines with get_coastlines_gdb and bbox depending on axlims, plot on ax and set axlims back to original values
+    """
+    #TODO: if ax is GeoAxis, get crs from ax
+    
+    if ax is None:
+        ax = plt.gca()
+    
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    bbox = (xlim[0], ylim[0], xlim[1], ylim[1])
+    
+    if 'edgecolor' not in kwargs:
+        kwargs['edgecolor'] = 'k'
+    if 'facecolor' not in kwargs:
+        kwargs['facecolor'] = 'none'
+    if 'linewidth' not in kwargs:
+        kwargs['linewidth'] = 0.5
+    
+    coastlines_gdb = get_coastlines_ldb(ldb_dir=ldb_dir,bbox=bbox, min_area=min_area, crs=crs)
+    if coastlines_gdb.empty:
+        return
+    
+    coastlines_gdb.plot(ax=ax, **kwargs)
+    
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
 
 def plot_borders(ax=None, res:str='h', crs=None, **kwargs):
     """
