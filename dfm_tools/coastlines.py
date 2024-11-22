@@ -5,10 +5,6 @@ import pandas as pd
 import datetime as dt
 from dfm_tools.data import gshhs_coastlines_shp
 
-#prova
-print(f'prova')
-#prova 
-
 __all__ = ["get_coastlines_gdb",
            "plot_coastlines",
            "get_borders_gdb",
@@ -58,7 +54,7 @@ def get_coastlines_gdb(res:str='h', bbox:tuple = (-180, -90, 180, 90), min_area:
         
     # download gshhs data if not present and return dir
     dir_gshhs = gshhs_coastlines_shp()
-
+    print(dir_gshhs)
     file_shp_L1 = os.path.join(dir_gshhs,'GSHHS_shp',res,f'GSHHS_{res}_L1.shp') #coastlines
     file_shp_L6 = os.path.join(dir_gshhs,'GSHHS_shp',res,f'GSHHS_{res}_L6.shp') #Antarctic grounding-line polygons
     file_shp_L2 = os.path.join(dir_gshhs,'GSHHS_shp',res,f'GSHHS_{res}_L2.shp') #lakes
