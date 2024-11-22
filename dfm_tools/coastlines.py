@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import datetime as dt
 from dfm_tools.data import gshhs_coastlines_shp
+import hydrolib.core.dflowfm as hcdfm
 
 __all__ = ["get_coastlines_gdb",
            "get_coastlines_ldb",
@@ -116,7 +117,7 @@ def get_coastlines_ldb(ldb_dir:str = None, bbox:tuple = (-180, -90, 180, 90), mi
     dir_gshhs = ldb_dir
     print(dir_gshhs)
     #use htdrolib-core for reading ldb
-    file_ldb = r'C:\Users\bguid\OneDrive\Documents\Lavori\2023\PhD_Enea\work\Delft\Coastline\spezia_merged_final_gui.ldb'
+    file_ldb = ldb_dir
     print('>> reading coastlines: ',end='')
     dtstart = dt.datetime.now()
     
