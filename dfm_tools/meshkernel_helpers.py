@@ -437,27 +437,27 @@ def generate_bndpli_cutland_ldb(mk:meshkernel.MeshKernel, ldb_dir:str = None,min
     bbox = (mesh_bnds.x_coordinates.min(), mesh_bnds.y_coordinates.min(), mesh_bnds.x_coordinates.max(), mesh_bnds.y_coordinates.max())
     coastlines_gdf = get_coastlines_ldb(ldb_dir = ldb_dir,bbox=bbox, min_area=min_area, crs=crs)
     
-    print(coastline_gdf)
+    return coastline_gdf
     
-    meshbnd_ls = LineString(mesh_bnds_xy)
-    coastlines_mp = MultiPolygon(coastlines_gdf.geometry.tolist())
-    coastlines_mp = coastlines_mp.buffer(buffer)
-    bnd_ls = meshbnd_ls.difference(coastlines_mp)
+    # meshbnd_ls = LineString(mesh_bnds_xy)
+    # coastlines_mp = MultiPolygon(coastlines_gdf.geometry.tolist())
+    # coastlines_mp = coastlines_mp.buffer(buffer)
+    # bnd_ls = meshbnd_ls.difference(coastlines_mp)
     
-    #attempt to merge MultiLineString to single LineString
-    if isinstance(bnd_ls,MultiLineString):
-        print('attemting to merge lines in MultiLineString to single LineString (if connected)')
-        bnd_ls = linemerge(bnd_ls)
+    # #attempt to merge MultiLineString to single LineString
+    # if isinstance(bnd_ls,MultiLineString):
+        # print('attemting to merge lines in MultiLineString to single LineString (if connected)')
+        # bnd_ls = linemerge(bnd_ls)
     
-    #convert MultiLineString/LineString to GeoDataFrame
-    if isinstance(bnd_ls,MultiLineString):
-        bnd_gdf = gpd.GeoDataFrame(geometry=list(bnd_ls.geoms))
-    elif isinstance(bnd_ls,LineString):
-        bnd_gdf = gpd.GeoDataFrame(geometry=[bnd_ls])
+    # #convert MultiLineString/LineString to GeoDataFrame
+    # if isinstance(bnd_ls,MultiLineString):
+        # bnd_gdf = gpd.GeoDataFrame(geometry=list(bnd_ls.geoms))
+    # elif isinstance(bnd_ls,LineString):
+        # bnd_gdf = gpd.GeoDataFrame(geometry=[bnd_ls])
     
-    #set crs from coastlines
-    bnd_gdf.crs = coastlines_gdf.crs
-    return bnd_gdf
+    # #set crs from coastlines
+    # bnd_gdf.crs = coastlines_gdf.crs
+    # return bnd_gdf
 
 
 def interpolate_bndpli(bnd_gdf,res):
