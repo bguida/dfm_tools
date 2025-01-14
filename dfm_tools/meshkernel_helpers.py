@@ -437,7 +437,7 @@ def generate_bndpli_cutland_ldb(mk:meshkernel.MeshKernel, ldb_dir:str = None,min
     bbox = (mesh_bnds.x_coordinates.min(), mesh_bnds.y_coordinates.min(), mesh_bnds.x_coordinates.max(), mesh_bnds.y_coordinates.max())
     coastlines_gdf = get_coastlines_ldb(ldb_dir = ldb_dir,bbox=bbox, min_area=min_area, crs=crs)
     
-    return coastline_gdf
+    return coastlines_gdf
     
     # meshbnd_ls = LineString(mesh_bnds_xy)
     # coastlines_mp = MultiPolygon(coastlines_gdf.geometry.tolist())
