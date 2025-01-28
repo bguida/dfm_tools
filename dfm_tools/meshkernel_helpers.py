@@ -386,25 +386,27 @@ def generate_bndpli_cutland(mk:meshkernel.MeshKernel, res:str='f', min_area:floa
     bbox = (mesh_bnds.x_coordinates.min(), mesh_bnds.y_coordinates.min(), mesh_bnds.x_coordinates.max(), mesh_bnds.y_coordinates.max())
     coastlines_gdf = get_coastlines_gdb(bbox=bbox, res=res, min_area=min_area, crs=crs)
     
-    meshbnd_ls = LineString(mesh_bnds_xy)
-    coastlines_mp = MultiPolygon(coastlines_gdf.geometry.tolist())
-    coastlines_mp = coastlines_mp.buffer(buffer)
-    bnd_ls = meshbnd_ls.difference(coastlines_mp)
+    return coastlines_gdf
     
-    #attempt to merge MultiLineString to single LineString
-    if isinstance(bnd_ls,MultiLineString):
-        print('attemting to merge lines in MultiLineString to single LineString (if connected)')
-        bnd_ls = linemerge(bnd_ls)
+    # meshbnd_ls = LineString(mesh_bnds_xy)
+    # coastlines_mp = MultiPolygon(coastlines_gdf.geometry.tolist())
+    # coastlines_mp = coastlines_mp.buffer(buffer)
+    # bnd_ls = meshbnd_ls.difference(coastlines_mp)
     
-    #convert MultiLineString/LineString to GeoDataFrame
-    if isinstance(bnd_ls,MultiLineString):
-        bnd_gdf = gpd.GeoDataFrame(geometry=list(bnd_ls.geoms))
-    elif isinstance(bnd_ls,LineString):
-        bnd_gdf = gpd.GeoDataFrame(geometry=[bnd_ls])
+    # #attempt to merge MultiLineString to single LineString
+    # if isinstance(bnd_ls,MultiLineString):
+        # print('attemting to merge lines in MultiLineString to single LineString (if connected)')
+        # bnd_ls = linemerge(bnd_ls)
     
-    #set crs from coastlines
-    bnd_gdf.crs = coastlines_gdf.crs
-    return bnd_gdf
+    # #convert MultiLineString/LineString to GeoDataFrame
+    # if isinstance(bnd_ls,MultiLineString):
+        # bnd_gdf = gpd.GeoDataFrame(geometry=list(bnd_ls.geoms))
+    # elif isinstance(bnd_ls,LineString):
+        # bnd_gdf = gpd.GeoDataFrame(geometry=[bnd_ls])
+    
+    # #set crs from coastlines
+    # bnd_gdf.crs = coastlines_gdf.crs
+    # return bnd_gdf
 
 def generate_bndpli_cutland_ldb(mk:meshkernel.MeshKernel, ldb_dir:str = None,min_area:float = 0, crs:(int,str) = None, buffer:float = 0):
     """
