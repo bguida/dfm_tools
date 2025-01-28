@@ -148,7 +148,7 @@ def get_coastlines_ldb(ldb_dir:str = None, bbox:tuple = (-180, -90, 180, 90), mi
     gdf_polyfile = PolyFile_to_geodataframe_linestrings(polyfile_object,crs=crs)
 
     # print(f'{(dt.datetime.now()-dtstart).total_seconds():.2f} sec')
-    print(gdf_polyfile)
+    # print(gdf_polyfile)
     
     # if crs:
     coastlines_gdb = gdf_polyfile.to_crs(crs)
