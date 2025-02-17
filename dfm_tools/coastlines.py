@@ -143,14 +143,14 @@ def get_coastlines_shp(dirshp:str = None, res:str='h', bbox:tuple = (-180, -90, 
     dir_gshhs = dirshp
     print(dir_gshhs)
     file_shp_L1 = os.path.join(dir_gshhs,'OpenSM_area_sel.shp') #coastlines
-    # file_shp_L6 = os.path.join(dir_gshhs,'GSHHS_shp',res,f'GSHHS_{res}_L6.shp') #Antarctic grounding-line polygons
+    file_shp_L6 = os.path.join(dir_gshhs,'OpenSM_area_sel.shp') #Antarctic grounding-line polygons
     # file_shp_L2 = os.path.join(dir_gshhs,'GSHHS_shp',res,f'GSHHS_{res}_L2.shp') #lakes
     # file_shp_L3 = os.path.join(dir_gshhs,'GSHHS_shp',res,f'GSHHS_{res}_L3.shp') #islands-in-lakes
     
     print('>> reading coastlines: ',end='')
     dtstart = dt.datetime.now()
     coastlines_gdb_L1 = gpd.read_file(file_shp_L1, columns=columns, where=f"area>{min_area}", bbox=bbox)
-    #coastlines_gdb_L6 = gpd.read_file(file_shp_L6, columns=columns, where=f"area>{min_area}", bbox=bbox)
+    coastlines_gdb_L6 = gpd.read_file(file_shp_L6, columns=columns, where=f"area>{min_area}", bbox=bbox)
     coastlines_gdb_list = [coastlines_gdb_L1,coastlines_gdb_L6]
     if len(coastlines_gdb_L1)<2: #if only one L1 polygon is selected, automatically add lakes and islands-in-lakes
         coastlines_gdb_L2 = gpd.read_file(file_shp_L2, columns=columns, where=f"area>{min_area}", bbox=bbox)
