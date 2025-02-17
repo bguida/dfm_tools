@@ -145,7 +145,8 @@ def get_coastlines_ldb(ldb_dir:str = None, bbox:tuple = (-180, -90, 180, 90), mi
     dtstart = dt.datetime.now()
     
     polyfile_object = hcdfm.PolyFile(file_ldb)
-    gdf_polyfile = PolyFile_to_geodataframe_linestrings(polyfile_object,crs=crs)
+    gdf_polyfile = polyfile_object
+    #gdf_polyfile = PolyFile_to_geodataframe_linestrings(polyfile_object,crs=crs)
 
     # print(f'{(dt.datetime.now()-dtstart).total_seconds():.2f} sec')
     # print(gdf_polyfile)
