@@ -9,6 +9,7 @@ import hydrolib.core.dflowfm as hcdfm
 from shapely.geometry import LineString
 
 __all__ = ["get_coastlines_gdb",
+           "get_coastlines_shp",
            "get_coastlines_ldb",
            "plot_coastlines",
            "plot_coastlines_ldb",
@@ -90,6 +91,66 @@ def get_coastlines_gdb(res:str='h', bbox:tuple = (-180, -90, 180, 90), min_area:
     dtstart = dt.datetime.now()
     coastlines_gdb_L1 = gpd.read_file(file_shp_L1, columns=columns, where=f"area>{min_area}", bbox=bbox)
     coastlines_gdb_L6 = gpd.read_file(file_shp_L6, columns=columns, where=f"area>{min_area}", bbox=bbox)
+    coastlines_gdb_list = [coastlines_gdb_L1,coastlines_gdb_L6]
+    if len(coastlines_gdb_L1)<2: #if only one L1 polygon is selected, automatically add lakes and islands-in-lakes
+        coastlines_gdb_L2 = gpd.read_file(file_shp_L2, columns=columns, where=f"area>{min_area}", bbox=bbox)
+        coastlines_gdb_list.append(coastlines_gdb_L2)
+        coastlines_gdb_L3 = gpd.read_file(file_shp_L3, columns=columns, where=f"area>{min_area}", bbox=bbox)
+        coastlines_gdb_list.append(coastlines_gdb_L3)
+    
+    # remove empty geodataframes from list to avoid FutureWarning
+    # escape for empty resulting list and concatenate otherwise
+    coastlines_gdb_list = [x for x in coastlines_gdb_list if not x.empty]
+    if not coastlines_gdb_list:
+        return gpd.GeoDataFrame()
+    coastlines_gdb = pd.concat(coastlines_gdb_list)
+    print(f'{(dt.datetime.now()-dtstart).total_seconds():.2f} sec')
+    
+    if crs:
+        coastlines_gdb = coastlines_gdb.to_crs(crs)
+    
+    return coastlines_gdb
+
+def get_coastlines_shp(dirshp:str = None, res:str='h', bbox:tuple = (-180, -90, 180, 90), min_area:float = 0, crs:str = None, columns:list = ['area']) -> gpd.geoseries.GeoSeries:
+    """
+    SHP coastlines: custom
+    geopandas docs https://geopandas.org/en/stable/docs/reference/api/geopandas.read_file.html
+    
+    Parameters
+    ----------
+    res : str, optional
+        f(ull), h(igh), i(ntermediate), l(ow), c(oarse) resolution. The default is 'h'.
+    bbox : tuple, optional
+        (minx, miny, maxx, maxy), also includes shapes that are partly in the bbox. The default is (-180, -90, 180, 90).
+    min_area : float, optional
+        in km2, min_area>0 speeds up process. The default is 0.
+    crs : str, optional
+        coordinate reference system
+    columns : list, optional
+        which shapefile columns to include, None gives all. The default is ['area'].
+
+    Returns
+    -------
+    coastlines_gdb : TYPE
+        DESCRIPTION.
+
+    """
+    
+    if crs is not None:
+        bbox = bbox_convert_crs(bbox, crs)
+        
+    # load shapefile data
+    dir_gshhs = dirshp
+    print(dir_gshhs)
+    file_shp_L1 = os.path.join(dir_gshhs,'Liguria_Toscana_4326.shp') #coastlines
+    # file_shp_L6 = os.path.join(dir_gshhs,'GSHHS_shp',res,f'GSHHS_{res}_L6.shp') #Antarctic grounding-line polygons
+    # file_shp_L2 = os.path.join(dir_gshhs,'GSHHS_shp',res,f'GSHHS_{res}_L2.shp') #lakes
+    # file_shp_L3 = os.path.join(dir_gshhs,'GSHHS_shp',res,f'GSHHS_{res}_L3.shp') #islands-in-lakes
+    
+    print('>> reading coastlines: ',end='')
+    dtstart = dt.datetime.now()
+    coastlines_gdb_L1 = gpd.read_file(file_shp_L1, columns=columns, where=f"area>{min_area}", bbox=bbox)
+    #coastlines_gdb_L6 = gpd.read_file(file_shp_L6, columns=columns, where=f"area>{min_area}", bbox=bbox)
     coastlines_gdb_list = [coastlines_gdb_L1,coastlines_gdb_L6]
     if len(coastlines_gdb_L1)<2: #if only one L1 polygon is selected, automatically add lakes and islands-in-lakes
         coastlines_gdb_L2 = gpd.read_file(file_shp_L2, columns=columns, where=f"area>{min_area}", bbox=bbox)
