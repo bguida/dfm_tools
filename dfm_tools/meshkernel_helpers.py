@@ -23,7 +23,7 @@ __all__ = [
     "make_basegrid",
     "refine_basegrid",
     "generate_bndpli_cutland",
-    "generate_bndpli_cutland_ldb",
+    "generate_bndpli_cutland_shp",
     "interpolate_bndpli",
     ]
 
