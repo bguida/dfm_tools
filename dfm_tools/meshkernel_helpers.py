@@ -6,7 +6,7 @@ from dfm_tools import __version__
 import getpass
 import numpy as np
 from dfm_tools.coastlines import get_coastlines_gdb
-from dfm_tools.coastlines import get_coastlines_ldb
+from dfm_tools.coastlines import get_coastlines_shp
 from netCDF4 import default_fillvals
 import geopandas as gpd
 from shapely import MultiPolygon, LineString, MultiLineString
@@ -437,11 +437,8 @@ def generate_bndpli_cutland_shp(mk:meshkernel.MeshKernel, dirshp:str = None,min_
     bbox = (mesh_bnds.x_coordinates.min(), mesh_bnds.y_coordinates.min(), mesh_bnds.x_coordinates.max(), mesh_bnds.y_coordinates.max())
     coastlines_gdf = get_coastlines_shp(dirshp = dirshp,bbox=bbox, crs=crs)
     
-    # return coastlines_gdf
-    
     meshbnd_ls = LineString(mesh_bnds_xy)
-    # coastlines_mp = MultiPolygon(coastlines_gdf.geometry.tolist())
-    coastlines_mp = MultiLineString(coastlines_gdf.geometry.tolist())
+    coastlines_mp = MultiPolygon(coastlines_gdf.geometry.tolist())
     coastlines_mp = coastlines_mp.buffer(buffer)
     bnd_ls = meshbnd_ls.difference(coastlines_mp)
     
