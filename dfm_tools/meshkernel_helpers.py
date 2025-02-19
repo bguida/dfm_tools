@@ -436,6 +436,7 @@ def generate_bndpli_cutland_shp(mk:meshkernel.MeshKernel, dirshp:str = None,min_
     
     bbox = (mesh_bnds.x_coordinates.min(), mesh_bnds.y_coordinates.min(), mesh_bnds.x_coordinates.max(), mesh_bnds.y_coordinates.max())
     coastlines_gdf = get_coastlines_shp(dirshp = dirshp,bbox=bbox, crs=crs)
+    coastlines_gdf = coastlines_gdf.explode()
     
     meshbnd_ls = LineString(mesh_bnds_xy)
     coastlines_mp = MultiPolygon(coastlines_gdf.geometry.tolist())
