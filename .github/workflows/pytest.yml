@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.11", "3.12"]
+        python-version: ["3.9", "3.11", "3.12", "3.13"]
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
 
@@ -42,10 +42,10 @@ jobs:
     - name: Test with pytest
       env:
         CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
-        COPERNICUS_MARINE_SERVICE_USERNAME: ${{ secrets.COPERNICUS_MARINE_SERVICE_USERNAME }}
-        COPERNICUS_MARINE_SERVICE_PASSWORD: ${{ secrets.COPERNICUS_MARINE_SERVICE_PASSWORD }}
+        COPERNICUSMARINE_SERVICE_USERNAME: ${{ secrets.COPERNICUSMARINE_SERVICE_USERNAME }}
+        COPERNICUSMARINE_SERVICE_PASSWORD: ${{ secrets.COPERNICUSMARINE_SERVICE_PASSWORD }}
       run: |
-        pytest -m "not requireslocaldata and not era5slow" --cov=dfm_tools --cov-report xml --cov-report term
+        pytest -m "not requireslocaldata" --cov=dfm_tools --cov-report xml --cov-report term
     - uses: codecov/codecov-action@v4
       env:
         CODECOV_TOKEN: ${{secrets.CODECOV_TOKEN}}

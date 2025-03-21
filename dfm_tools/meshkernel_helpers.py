@@ -20,6 +20,7 @@ __all__ = [
     "meshkernel_delete_withgdf",
     "meshkernel_get_illegalcells",
     "meshkernel_to_UgridDataset",
+    "meshkernel_get_bbox",
     "make_basegrid",
     "refine_basegrid",
     "generate_bndpli_cutland",
@@ -328,29 +329,87 @@ def make_basegrid(lon_min,lon_max,lat_min,lat_max,dx,dy,angle=0,
     return mk
 
 
-def refine_basegrid(mk, data_bathy_sel, min_edge_size):
+def refine_basegrid(
+        mk:meshkernel.MeshKernel,
+        data_bathy_sel:xr.DataArray,
+        **kwargs,
+        ):
     """
-    empty docstring
+    Refine the grid based on gridded bathymetry.
+
+    Parameters
+    ----------
+    mk : meshkernel.MeshKernel
+        The meshkernel instance containing the base grid. Updated in place.
+    data_bathy_sel : xr.DataArray
+        The bathymetry data used for the refinement. Is converted to 
+        meshkernel.GriddedSamples().
+    **kwargs : TYPE
+        Arguments passed on to meshkernel.MeshRefinementParameters(). Some
+        options from the meshkernelpy docs:
+        * min_edge_size (float): Minimum edge size. Meshkernelpy default is
+        `0.5`. Overwritten with 500 here.
+        * refinement_type (RefinementType): Refinement criterion type. 
+        Meshkernelpy default is `RefinementType.REFINEMENT_LEVELS`. Overwritten
+        with `RefinementType.WAVE_COURANT` here.
+        * smoothing_iterations (int, optional): The number of smoothing
+        iterations. Meshkernelpy default is `5`. Overwritten with 2 here.
+        * connect_hanging_nodes (bool): Whether to connect hanging nodes at the
+        end of the iteration. Meshkernelpy default is `True`. Set to False to
+        do multiple refinement steps (e.g. for multiple regions)
+        * max_courant_time (double, optional): Maximum courant time in seconds.
+        Meshkernelpy default is `120`.
+        
     """
     
+    if 'min_edge_size' not in kwargs:
+        # min_edge_size (float): Minimum edge size. Meshkernelpy default is 
+        # `0.5`. Overwrite with more sensible value for coastal models.
+        kwargs['min_edge_size'] = 500
+    if 'refinement_type' not in kwargs:
+        # Refinement criterion type. Meshkernelpy default is 
+        # `RefinementType.REFINEMENT_LEVELS`. 
+        kwargs['refinement_type'] = meshkernel.RefinementType.WAVE_COURANT
+    if 'smoothing_iterations' not in kwargs:
+        # The number of smoothing iterations. Meshkernelpy default is `5`.
+        kwargs['smoothing_iterations'] = 2
+
     lon_np = data_bathy_sel.lon.to_numpy()
     lat_np = data_bathy_sel.lat.to_numpy()
     values_np = data_bathy_sel.to_numpy().flatten()
-    gridded_samples = meshkernel.GriddedSamples(x_coordinates=lon_np,y_coordinates=lat_np,values=values_np)
-
+    gridded_samples = meshkernel.GriddedSamples(
+        x_coordinates=lon_np,
+        y_coordinates=lat_np,
+        values=values_np)
 
     #refinement
-    mesh_refinement_parameters = meshkernel.MeshRefinementParameters(min_edge_size=min_edge_size, #always in meters
-                                                                     refinement_type=meshkernel.RefinementType(1), #Wavecourant/1,
-                                                                     connect_hanging_nodes=True, #set to False to do multiple refinement steps (e.g. for multiple regions)
-                                                                     smoothing_iterations=2,
-                                                                     max_courant_time=120)
+    mesh_refinement_parameters = meshkernel.MeshRefinementParameters(**kwargs)
     
-    mk.mesh2d_refine_based_on_gridded_samples(gridded_samples=gridded_samples,
-                                               mesh_refinement_params=mesh_refinement_parameters,
-                                               use_nodal_refinement=True) #TODO: what does this do?
+    mk.mesh2d_refine_based_on_gridded_samples(
+        gridded_samples=gridded_samples,
+        mesh_refinement_params=mesh_refinement_parameters,
+        use_nodal_refinement=True,
+        )
+
+
+def meshkernel_get_outer_xycoords(mk:meshkernel.MeshKernel):
+    mesh_bnds = mk.mesh2d_get_mesh_boundaries_as_polygons()
+    xcoords = mesh_bnds.x_coordinates
+    ycoords = mesh_bnds.y_coordinates
+    if mesh_bnds.geometry_separator in xcoords:
+        # TODO: would be nice to get only the outer xycoords instead
+        # or to have easier selection of outer xycoords
+        raise Exception('use meshkernel_get_outer_xycoords() on an uncut grid')
+    return xcoords, ycoords
+
     
-    return mk
+def meshkernel_get_bbox(mk:meshkernel.MeshKernel):
+    """
+    get the bbox of a meshkernel instance as (xmin, ymin, xmax, ymax)
+    """
+    xcoords, ycoords = meshkernel_get_outer_xycoords(mk)
+    bbox = (xcoords.min(), ycoords.min(), xcoords.max(), ycoords.max())
+    return bbox
 
 
 def generate_bndpli_cutland(mk:meshkernel.MeshKernel, res:str='f', min_area:float = 0, crs:(int,str) = None, buffer:float = 0):
@@ -377,13 +436,7 @@ def generate_bndpli_cutland(mk:meshkernel.MeshKernel, res:str='f', min_area:floa
         DESCRIPTION.
 
     """
-    
-    mesh_bnds = mk.mesh2d_get_mesh_boundaries_as_polygons()
-    if mesh_bnds.geometry_separator in mesh_bnds.x_coordinates:
-        raise Exception('use dfmt.generate_bndpli_cutland() on an uncut grid')
-    mesh_bnds_xy = np.c_[mesh_bnds.x_coordinates,mesh_bnds.y_coordinates]
-    
-    bbox = (mesh_bnds.x_coordinates.min(), mesh_bnds.y_coordinates.min(), mesh_bnds.x_coordinates.max(), mesh_bnds.y_coordinates.max())
+    bbox = meshkernel_get_bbox(mk)
     coastlines_gdf = get_coastlines_gdb(bbox=bbox, res=res, min_area=min_area, crs=crs)
 
     meshbnd_ls = LineString(mesh_bnds_xy)
@@ -438,6 +491,8 @@ def generate_bndpli_cutland_shp(mk:meshkernel.MeshKernel, dirshp:str = None,min_
     coastlines_gdf = get_coastlines_shp(dirshp = dirshp,bbox=bbox, crs=crs)
     coastlines_gdf = coastlines_gdf.explode()
     
+    xcoords,ycoords = meshkernel_get_outer_xycoords(mk)
+    mesh_bnds_xy = np.c_[xcoords,ycoords]
     meshbnd_ls = LineString(mesh_bnds_xy)
     coastlines_mp = MultiPolygon(coastlines_gdf.geometry.tolist())
     coastlines_mp = coastlines_mp.buffer(buffer)

@@ -12,10 +12,10 @@
 
 ## Setup local developer environment
 
-- python 3.11 is recommended, [python>=3.9 is required](https://github.com/Deltares/dfm_tools/issues/267), [python 3.13 not yet supported](https://github.com/Deltares/dfm_tools/issues/559)
-- download Miniforge3 from [the miniforge github](https://github.com/conda-forge/miniforge?tab=readme-ov-file#download) and install it with the recommended settings.
+- python 3.9 to 3.13 are supported, python 3.12 is recommended
+- download Miniforge3 from [conda-forge.org](https://conda-forge.org/miniforge) and install it with the recommended settings.
 - open Miniforge Prompt and navigate to the local checkout folder of the repository
-- `conda create --name dfm_tools_env python=3.11 git spyder -y` (`git` and `spyder` are optional)
+- `conda create --name dfm_tools_env python=3.12 git spyder -y` (`git` and `spyder` are optional)
 - `conda activate dfm_tools_env`
 - `python -m pip install -e .[dev,docs,examples]` (pip developer mode, any updates to the local folder are immediately available in your python. It also installs all requirements via pip, square brackets are to install optional dependency groups)
 - `conda deactivate`
@@ -65,11 +65,12 @@
 ## Create release
 
 - make sure the `main` branch is up to date (check pytest warnings, important issues solved, all pullrequests and branches closed)
+- create and checkout branch for release
 - bump the versionnumber with `bumpversion minor`
 - update `docs/whats-new.md` and add a date to the current release heading
-- run local testbank with `pytest -m "not era5slow and not requireslocaldata"`
+- run local testbank with `pytest -m "not requireslocaldata"`
 - local check with: `python -m build` and `twine check dist/*` ([does not work on WCF](https://github.com/pypa/setuptools/issues/4133))
-- commit+push to github via PR
+- commit+push to branch and merge PR
 - copy the dfm_tools version from [pyproject.toml](https://github.com/Deltares/dfm_tools/blob/main/pyproject.toml) (e.g. `0.11.0`)
 - create a [new release](https://github.com/Deltares/dfm_tools/releases/new)
 - click `choose a tag` and type v+versionnumber (e.g. `v0.11.0`), click `create new tag: v0.11.0 on publish`

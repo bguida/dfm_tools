@@ -1,18 +1,17 @@
 import os
 import re
 import xarray as xr
-import dask
 import datetime as dt
 import glob
 import pandas as pd
 import logging
 import numpy as np
-from dfm_tools.errors import OutOfRangeError
-
+from dfm_tools.interpolate_grid2bnd import _ds_sel_time_outside
+from scipy.ndimage import distance_transform_edt
+    
 __all__ = [
     "preprocess_hisnc",
     "preprocess_ERA5",
-    "preprocess_woa",
     "merge_meteofiles",
     "Dataset_varswithdim",
 ]
@@ -32,6 +31,8 @@ def file_to_list(file_nc):
                 return list(filter(re.compile(pattern).search, strings))
             file_nc_list = glob_re(basename, glob.glob(os.path.join(dirname,f'*{ext}')))
         else:
+            # convert to string, since glob does not support pathlib.Path
+            file_nc = str(file_nc)
             file_nc_list = glob.glob(file_nc)
         file_nc_list.sort()
     if len(file_nc_list)==0:
@@ -41,7 +42,9 @@ def file_to_list(file_nc):
 
 def preprocess_hisnc(ds):
     """
-    Look for dim/coord combination and use this for Dataset.set_index(), to enable station/gs/crs/laterals label based indexing. If duplicate labels are found (like duplicate stations), these are dropped to avoid indexing issues.
+    Look for dim/coord combination and use this for Dataset.set_index(), to enable
+    station/gs/crs/laterals label based indexing. If duplicate labels are found
+    (like duplicate stations), these are dropped to avoid indexing issues.
     
     Parameters
     ----------
@@ -57,24 +60,30 @@ def preprocess_hisnc(ds):
 
     """
     
-    #generate dim_coord_dict to set indexes, this will be something like {'stations':'station_name','cross_section':'cross_section_name'} after loop
+    # generate dim_coord_dict to set indexes, this will be something like 
+    # {'stations':'station_name','cross_section':'cross_section_name'} after loop
     dim_coord_dict = {}
     for ds_coord in ds.coords.keys():
         ds_coord_dtype = ds[ds_coord].dtype
-        ds_coord_dim = ds[ds_coord].dims[0] #these vars always have only one dim
-        if ds_coord_dtype.str.startswith('|S'): #these are station/crs/laterals/gs names/ids
+        # these vars always have only one dim
+        ds_coord_dim = ds[ds_coord].dims[0]
+        # these are station/crs/laterals/gs names/ids
+        if ds_coord_dtype.str.startswith('|S'):
             dim_coord_dict[ds_coord_dim] = ds_coord
     
     #loop over dimensions and set corresponding coordinates/variables from dim_coord_dict as their index
     for dim in dim_coord_dict.keys():
         coord = dim_coord_dict[dim]
-        ds[coord] = ds[coord].load().str.decode('utf-8',errors='ignore').str.strip() #.load() is essential to convert not only first letter of string.
+        # .load() is essential to convert not only first letter of string.
+        ds[coord] = ds[coord].load().str.decode('utf-8',errors='ignore').str.strip()
         ds = ds.set_index({dim:coord})
         
-        #drop duplicate indices (stations/crs/gs), this avoids "InvalidIndexError: Reindexing only valid with uniquely valued Index objects"
+        # drop duplicate indices (stations/crs/gs), this avoids 
+        # "InvalidIndexError: Reindexing only valid with uniquely valued Index objects"
         duplicated_keepfirst = ds[dim].to_series().duplicated(keep='first')
         if duplicated_keepfirst.sum()>0:
-            print(f'dropping {duplicated_keepfirst.sum()} duplicate "{coord}" labels to avoid InvalidIndexError')
+            print(f'dropping {duplicated_keepfirst.sum()} duplicate "{coord}" labels '
+                  'to avoid InvalidIndexError')
             ds = ds[{dim:~duplicated_keepfirst}]
 
     #check dflowfm version/date and potentially raise warning about incorrect layers
@@ -83,9 +92,11 @@ def preprocess_hisnc(ds):
         source_attr_version = source_attr.split(', ')[1]
         source_attr_date = source_attr.split(', ')[2]
         if pd.Timestamp(source_attr_date) < dt.datetime(2020,11,28):
-            logger.warning('Your model was run with a D-FlowFM version from before 28-10-2020 '
-                           f'({source_attr_version} from {source_attr_date}), the layers in the hisfile are incorrect. '
-                           'Check UNST-2920 and UNST-3024 for more information, it was fixed from OSS 67858.')
+            logger.warning(
+                'Your model was run with a D-FlowFM version from before 28-10-2020 '
+                f'({source_attr_version} from {source_attr_date}), the layers in the '
+                'hisfile are incorrect. Check UNST-2920 and UNST-3024 for more '
+                'information, it was fixed from OSS 67858.')
     except KeyError: #no source attr present in hisfile, cannot check version
         pass
     except IndexError: #contains no ', '
@@ -96,25 +107,73 @@ def preprocess_hisnc(ds):
 
 def preprocess_ERA5(ds):
     """
-    Reduces the expver dimension in some of the ERA5 data (mtpr and other variables), which occurs in files with very recent data. The dimension contains the unvalidated data from the latest month in the second index in the expver dimension. The reduction is done with mean, but this is arbitrary, since there is only one valid value per timestep and the other one is nan.
-    """
-    if 'expver' in ds.dims:
-        # TODO: this drops int encoding which leads to unzipped float32 netcdf files: https://github.com/Deltares/dfm_tools/issues/781
-        ds = ds.mean(dim='expver')
+    Aligning ERA5 datasets before merging them. These operations are currently
+    (2025) only required when (also) using previously retrieved ERA5 data.
     
-    # datasets retrieved with new cds-beta have valid_time instead of time dimn/varn
-    # https://forum.ecmwf.int/t/new-time-format-in-era5-netcdf-files/3796/5?u=jelmer_veenstra
-    # TODO: can be removed after https://github.com/Unidata/netcdf4-python/issues/1357 or https://forum.ecmwf.int/t/3796 is fixed
+    In recent datasets retrieved from ERA5 the time dimension and variable are
+    now called valid_time. This is inconvenient since it causes issues when
+    merging with previously retrieved datasets. However, it is not necessary
+    for succesfully running a Delft3D FM simulation.
+    
+    Reducing the expver dimension: In the past, the expver dimension was
+    present if you downloaded ERA5 data that consisted of a mix of ERA5 and
+    ERA5T data. This dimension was also present in the data variables, so it
+    broke code. Therefore this dimension is reduced with a mean operation.
+    Any reduction operation would do the trick since there is only one valid
+    value per timestep and the other one is nan. In datasets downloaded
+    currently (2025) the expver dimension is not present anymore,
+    but anexpver variable is present defining whether the data comes
+    from ERA5 (1) or ERA5T (5).
+    
+    Adding expver coordinate if missing: The old datafiles did not contain an
+    expver variable (sometimes did contain an expver dim). The new datafiles
+    do contain an expver coordinate variable. Merging old and new files is only
+    possible if the coordinates are the same, so add a expver coordinate
+    variable to the old files with empty values.
+    
+    Removing scale_factor and add_offset: In the past, the ERA5 data was
+    supplied as integers with a scaling and offset that was different for
+    each downloaded file. This caused serious issues with merging files,
+    since the scaling/offset from the first file was assumed to be valid
+    for the others also, leading to invalid values. Only relevant for old
+    files. More info at https://github.com/Deltares/dfm_tools/issues/239.
+    """
+    
+    # datasets retrieved with new CDS have valid_time instead of time dim/var
+    # https://forum.ecmwf.int/t/new-time-format-in-era5-netcdf-files/3796/5
     if 'valid_time' in ds.coords:
         ds = ds.rename({'valid_time':'time'})
     
-    # Prevent writing to (incorrectly scaled) int, since it might mess up mfdataset (https://github.com/Deltares/dfm_tools/issues/239)
-    # By dropping scaling/offset encoding and converting to float32 (will result in a larger dataset)
-    # ERA5 datasets retrieved with the new CDS-beta are zipped float32 instead of scaled int, so this is only needed for backwards compatibility with old files.
+    # datasets retrieved from feb 2025 onwards have different mer/mtpr varnames
+    # convert back for backwards compatibility and clarity
+    # https://github.com/Deltares/dfm_tools/issues/1140
+    if 'avg_tprate' in ds.data_vars:
+        ds = ds.rename_vars({'avg_tprate':'mtpr'})
+    if 'avg_ie' in ds.data_vars:
+        ds = ds.rename_vars({'avg_ie':'mer'})
+    
+    # reduce the expver dimension (not present in newly retrieved files)
+    if 'expver' in ds.dims:
+        ds = ds.mean(dim='expver')
+    
+    # add empty expver coordinate to old files if not present to prevent
+    # "ValueError: coordinate 'expver' not present in all datasets"
+    # when merging old datasets (without expver coord) with new datasets
+    # has to be <U4 to avoid "NotImplementedError: Can not use auto rechunking
+    # with object dtype"
+    if 'expver' not in ds.variables:
+        data_expver = np.empty(shape=(len(ds.time)), dtype='<U4')
+        ds['expver'] = xr.DataArray(data=data_expver, dims='time')
+        ds = ds.set_coords('expver')
+    
+    # drop scaling/offset encoding if present and converting to float32. Not
+    # present in newly retrieved files, variables are zipped float32 instead
     for var in ds.data_vars.keys():
-        if not set(['dtype','scale_factor','add_offset']).issubset(ds.variables[var].encoding.keys()):
+        list_attrs = ['dtype','scale_factor','add_offset']
+        if not set(list_attrs).issubset(ds.variables[var].encoding.keys()):
             continue
-        # the _FillValue will still be -32767 (int default), but this is no issue for float32
+        # the _FillValue will still be -32767 (int default)
+        # this is no issue for float32
         ds[var].encoding.pop('scale_factor')
         ds[var].encoding.pop('add_offset')
         ds[var].encoding["dtype"] = "float32"
@@ -122,22 +181,13 @@ def preprocess_ERA5(ds):
     return ds
 
 
-def preprocess_woa(ds):
-    """
-    WOA time units is 'months since 0000-01-01 00:00:00' and calendar is not set (360_day is the only calendar that supports that unit in xarray)
-    """
-    ds.time.attrs['calendar'] = '360_day'
-    ds = xr.decode_cf(ds) #decode_cf after adding 360_day calendar attribute
-    return ds
-
-
-def merge_meteofiles(file_nc:str, preprocess=None, 
-                     time_slice:slice = slice(None,None),
-                     add_global_overlap:bool = False, zerostart:bool = False,
+def merge_meteofiles(file_nc:str,
+                     time_slice:slice,
+                     preprocess = None,
                      **kwargs) -> xr.Dataset:
     """
-    for merging for instance meteo files
-    x/y and lon/lat are renamed to longitude/latitude #TODO: is this desireable?
+    Merging of meteo files. Variables/coordinates x/y and lon/lat are renamed
+    to longitude/latitude.
 
     Parameters
     ----------
@@ -145,14 +195,11 @@ def merge_meteofiles(file_nc:str, preprocess=None,
         DESCRIPTION.
     preprocess : TYPE, optional
         DESCRIPTION. The default is None.
-    time_slice : slice, optional
-        DESCRIPTION. The default is slice(None,None).
-    add_global_overlap : bool, optional
-        GTSM specific: extend data beyond -180 to 180 longitude. The default is False.
-    zerostart : bool, optional
-        GTSM specific: extend data with 0-value fields 1 and 2 days before time_slice.start. The default is False.
+    time_slice : slice
+        slice(tstart,tstop).
     kwargs : dict, optional
-        arguments for xr.open_mfdataset() like `chunks` to prevent large chunks and resulting memory issues.
+        arguments for xr.open_mfdataset() like `chunks` to prevent large chunks and 
+        resulting memory issues.
 
     Returns
     -------
@@ -160,63 +207,73 @@ def merge_meteofiles(file_nc:str, preprocess=None,
         Merged meteo dataset.
 
     """
-    #TODO: add ERA5 conversions and features from hydro_tools\ERA5\ERA52DFM.py (except for varRhoair_alt, request FM support for varying airpressure: https://issuetracker.deltares.nl/browse/UNST-6593)
-    #TODO: provide extfile example with fmquantity/ncvarname combinations and cleanup FM code: https://issuetracker.deltares.nl/browse/UNST-6453
-    #TODO: add coordinate conversion (only valid for models with multidimensional lat/lon variables like HARMONIE and HIRLAM). This should work: ds_reproj = ds.set_crs(4326).to_crs(28992)
+    #TODO: add ERA5 conversions and features from hydro_tools\ERA5\ERA52DFM.py (except
+    # for varRhoair_alt, request FM support for varying airpressure: https://issuetracker.deltares.nl/browse/UNST-6593)
+    #TODO: add coordinate conversion (only valid for models with multidimensional 
+    # lat/lon variables like HARMONIE and HIRLAM). This should work: ds_reproj = ds.set_crs(4326).to_crs(28992)
     #TODO: add CMCC etc from gtsmip repos (mainly calendar conversion)
-    #TODO: put conversions in separate function?
     #TODO: maybe add renaming like {'salinity':'so', 'water_temp':'thetao'} for hycom
-       
-    #woa workaround
-    if preprocess == preprocess_woa:
-        decode_cf = False
-    else:
-        decode_cf = True        
+
+    if 'chunks' not in kwargs:
+        # enable dask chunking
+        kwargs['chunks'] = 'auto'
+    if 'data_vars' not in kwargs:
+        # avoid time dimension on other variables
+        # enforce error in case of conflicting variables
+        kwargs['data_vars'] = 'minimal'
+    if 'coords' not in kwargs:
+        # support number coordinate variable in some of the ERA5 datasets
+        kwargs['coords'] = 'minimal'
+    if 'join' not in kwargs:
+        # forbid slightly changed lat/lon values
+        # enforce alignment error if expver is not present in all datasets 
+        kwargs['join'] = 'exact'
 
     file_nc_list = file_to_list(file_nc)
-
-    print(f'>> opening multifile dataset of {len(file_nc_list)} files (can take a while with lots of files): ',end='')
+    print((f'>> opening multifile dataset of {len(file_nc_list)} files (can take a '
+           'while with lots of files): '),
+          end='')
     dtstart = dt.datetime.now()
-    with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-        # using dask option to avoid large chunks which speeds up the merging/writing process
-        data_xr = xr.open_mfdataset(file_nc_list,
-                                    preprocess=preprocess,
-                                    decode_cf=decode_cf,
-                                    **kwargs)
+    data_xr = xr.open_mfdataset(file_nc_list,
+                                preprocess=preprocess,
+                                **kwargs)
     print(f'{(dt.datetime.now()-dtstart).total_seconds():.2f} sec')
     
     # rename variables
-    # TODO: make generic, comparable rename in rename_dims_dict in dfmt.interpolate_grid2bnd.open_prepare_dataset()
+    # TODO: make generic, comparable rename in rename_dims_dict in 
+    # dfmt.interpolate_grid2bnd.open_prepare_dataset()
     if 'longitude' not in data_xr.variables:
         if 'lon' in data_xr.variables:
             data_xr = data_xr.rename({'lon':'longitude', 'lat':'latitude'})
         elif 'x' in data_xr.variables:
             data_xr = data_xr.rename({'x':'longitude', 'y':'latitude'})
         else:
-            raise KeyError('no longitude/latitude, lon/lat or x/y variables found in dataset')
+            raise KeyError(
+                'no longitude/latitude, lon/lat or x/y variables found in dataset'
+                )
     
-    # select time and do checks
-    # TODO: check if calendar is standard/gregorian
-    data_xr = data_xr.sel(time=time_slice)
+    # check for duplicated timesteps
     if data_xr.get_index('time').duplicated().any():
         print('dropping duplicate timesteps')
-        data_xr = data_xr.sel(time=~data_xr.get_index('time').duplicated()) #drop duplicate timesteps
+        # drop duplicate timesteps
+        data_xr = data_xr.sel(time=~data_xr.get_index('time').duplicated())
     
-    #check if there are times selected
-    if len(data_xr.time)==0:
-        raise OutOfRangeError(f'ERROR: no times selected, ds_text={data_xr.time[[0,-1]].to_numpy()} and time_slice={time_slice}')
+    # TODO: check if calendar is standard/gregorian
+    # check available times and select outside bounds
+    data_xr = _ds_sel_time_outside(
+        data_xr,
+        tstart=time_slice.start,
+        tstop=time_slice.stop,
+        )
     
     #check if there are no gaps (more than one unique timestep)
     times_pd = data_xr['time'].to_series()
     timesteps_uniq = times_pd.diff().iloc[1:].unique()
     if len(timesteps_uniq)>1:
-        raise Exception(f'ERROR: gaps found in selected dataset (are there sourcefiles missing?), unique timesteps (hour): {timesteps_uniq/1e9/3600}')
-    
-    #check if requested times are available in selected files (in times_pd)
-    if time_slice.start not in times_pd.index:
-        raise OutOfRangeError(f'ERROR: time_slice_start="{time_slice.start}" not in selected files, timerange: "{times_pd.index[0]}" to "{times_pd.index[-1]}"')
-    if time_slice.stop not in times_pd.index:
-        raise OutOfRangeError(f'ERROR: time_slice_stop="{time_slice.stop}" not in selected files, timerange: "{times_pd.index[0]}" to "{times_pd.index[-1]}"')
+        raise ValueError(
+            'time gaps found in selected dataset (missing files?), '
+            f'unique timesteps (hour): {timesteps_uniq/1e9/3600}'
+            )
     
     data_xr = convert_meteo_units(data_xr)
     
@@ -224,32 +281,16 @@ def merge_meteofiles(file_nc:str, preprocess=None,
     convert_360to180 = (data_xr['longitude'].to_numpy()>180).any()
     if convert_360to180: #TODO: make more flexible for models that eg pass -180/+180 crossing (add overlap at lon edges).
         lon_newvar = (data_xr.coords['longitude'] + 180) % 360 - 180
-        data_xr.coords['longitude'] = lon_newvar.assign_attrs(data_xr['longitude'].attrs) #this re-adds original attrs
+        # this re-adds original attrs
+        data_xr.coords['longitude'] = lon_newvar.assign_attrs(data_xr['longitude'].attrs)
         data_xr = data_xr.sortby(data_xr['longitude'])
-    
-    #GTSM specific addition for longitude overlap
-    if add_global_overlap: # assumes -180 to ~+179.75 (full global extent, but no overlap). Does not seem to mess up results for local models.
-        if len(data_xr.longitude.values) != len(np.unique(data_xr.longitude.values%360)):
-            raise Exception(f'add_global_overlap=True, but there are already overlapping longitude values: {data_xr.longitude}')
-        overlap_ltor = data_xr.sel(longitude=data_xr.longitude<=-179)
-        overlap_ltor['longitude'] = overlap_ltor['longitude'] + 360
-        overlap_rtol = data_xr.sel(longitude=data_xr.longitude>=179)
-        overlap_rtol['longitude'] = overlap_rtol['longitude'] - 360
-        data_xr = xr.concat([data_xr,overlap_ltor,overlap_rtol],dim='longitude').sortby('longitude')
-    
-    # GTSM specific addition for zerovalues during spinup
-    # doing this drops all encoding from variables, causing them to be converted into floats
-    if zerostart:
-        field_zerostart = data_xr.isel(time=[0,0])*0 #two times first field, set values to 0
-        field_zerostart['time'] = [times_pd.index[0]-dt.timedelta(days=2),times_pd.index[0]-dt.timedelta(days=1)] #TODO: is one zero field not enough? (is replacing first field not also ok? (results in 1hr transition period)
-        data_xr = xr.concat([field_zerostart,data_xr],dim='time',combine_attrs='no_conflicts') #combine_attrs argument prevents attrs from being dropped
-    
+
     return data_xr
 
 
 def convert_meteo_units(data_xr):
-    
     #TODO: check conversion implementation with hydro_tools\ERA5\ERA52DFM.py
+    #TODO: assert old unit instead of always converting
     #TODO: keep/update attrs
     #TODO: reduce code complexity
     
@@ -263,7 +304,8 @@ def convert_meteo_units(data_xr):
     varkeys = data_xr.variables.mapping.keys()
     
     #convert Kelvin to Celcius
-    for varkey_sel in ['air_temperature','dew_point_temperature','d2m','t2m']: # 2 meter dewpoint temparature / 2 meter temperature
+    # 2 meter dewpoint temparature / 2 meter temperature
+    for varkey_sel in ['air_temperature','dew_point_temperature','d2m','t2m']:
         if varkey_sel not in varkeys:
             continue
         current_unit = get_unit(data_xr[varkey_sel])
@@ -298,18 +340,20 @@ def convert_meteo_units(data_xr):
         print(f'converting {varkey_sel} unit from J/m2 to W/m2: [{current_unit}] to [{new_unit}]')
         data_xr[varkey_sel] = data_xr[varkey_sel] / 3600 # 3600s/h #TODO: 1W = 1J/s, so does not make sense?
         data_xr[varkey_sel].attrs['units'] = new_unit
-    #solar influx increase for beta=6%
+    #solar influx increase for beta=6% subtraction in DFM
     if 'ssr' in varkeys:
-        print('ssr (solar influx) increase for beta=6%')
-        data_xr['ssr'] = data_xr['ssr'] *.94
+        print('ssr (solar influx) increase for beta=6% subtraction in DflowFM')
+        data_xr['ssr'] = data_xr['ssr'] / 0.94
     
     return data_xr
 
 
-def Dataset_varswithdim(ds,dimname): #TODO: dit zit ook in xugrid, wordt nu gebruikt in hisfile voorbeeldscript en kan handig zijn, maar misschien die uit xugrid gebruiken?
+def Dataset_varswithdim(ds,dimname):
     """
     empty docstring
     """
+    # TODO: dit zit ook in xugrid, wordt nu gebruikt in hisfile voorbeeldscript en kan
+    # handig zijn, maar misschien die uit xugrid gebruiken?
     if dimname not in ds.dims:
         raise KeyError(f'dimension {dimname} not in dataset, available are: {list(ds.dims)}')
     
@@ -322,3 +366,30 @@ def Dataset_varswithdim(ds,dimname): #TODO: dit zit ook in xugrid, wordt nu gebr
     return ds
 
 
+def _nearest(a):
+    nans = np.isnan(a)
+    if not nans.any():
+        return a.copy()
+    indices = distance_transform_edt(
+        input=np.isnan(a),
+        return_distances=False,
+        return_indices=True,
+    )
+    return a[tuple(indices)]
+
+
+def interpolate_na_multidim(da, dim, keep_attrs=True):
+    """
+    Interpolate_na for multiple dimensions at once. Since it 
+    """
+    arr = xr.apply_ufunc(
+        _nearest,
+        da,
+        input_core_dims=[dim],
+        output_core_dims=[dim],
+        output_dtypes=[da.dtype],
+        dask="parallelized",
+        vectorize=True,
+        keep_attrs=keep_attrs,
+    ).transpose(*da.dims)
+    return arr

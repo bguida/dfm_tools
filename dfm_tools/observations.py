@@ -7,7 +7,7 @@ import geopandas as gpd
 from shapely import Point
 import os
 import xarray as xr
-from dfm_tools.download import copernicusmarine_credentials
+from dfm_tools.download import copernicusmarine_credentials, cds_credentials
 from dfm_tools.data import get_dir_testdata
 from erddapy import ERDDAP
 import requests
@@ -22,6 +22,9 @@ import matplotlib.dates as md
 import shutil
 import fiona
 import copernicusmarine
+import cdsapi
+import logging
+
 
 __all__ = ["ssh_catalog_subset",
            "ssh_catalog_toxynfile",
@@ -29,6 +32,15 @@ __all__ = ["ssh_catalog_subset",
            "ssh_retrieve_data",
            "ssh_netcdf_overview",
            ]
+
+if os.name == "nt":
+    # windows drive letter should include trailing slash
+    # https://github.com/Deltares/dfm_tools/issues/1084
+    PDRIVE = "p:/"
+else:
+    PDRIVE = "/p"
+
+CM_LOGGER = logging.getLogger("copernicusmarine")
 
 
 def _make_hydrotools_consistent(ds):
@@ -224,17 +236,19 @@ def cmems_ssh_read_catalog(source, overwrite=True):
     
     if not os.path.exists(file_index) or overwrite:
         #TODO: downloading all index files since filter does not work, can be avoided?
+        prev_lev = CM_LOGGER.level
+        CM_LOGGER.setLevel("WARNING")
         copernicusmarine_credentials()
         copernicusmarine.get(
             dataset_id=dataset_id,
-            service="files",
             index_parts=True,
             filter="*index_history.txt",
             output_directory=dir_index,
-            overwrite_output_data=True,
-            force_download=True,
+            overwrite=True,
             no_directories=True,
+            disable_progress_bar=True,
             )
+        CM_LOGGER.setLevel(prev_lev)
     else:
         print(f"CMEMS insitu catalog for dataset_id='{dataset_id}' is already present and overwrite=False")
     
@@ -443,7 +457,7 @@ def psmsl_gnssir_ssh_read_catalog_gettimes(station_list_gpd):
 
 def gesla3_ssh_read_catalog(file_gesla3_meta=None, only_coastal=True):
     if file_gesla3_meta is None:
-        file_gesla3_meta = r"p:\1230882-emodnet_hrsm\data\GESLA3\GESLA3_ALL 2.csv"
+        file_gesla3_meta = os.path.join(PDRIVE, "1230882-emodnet_hrsm", "data", "GESLA3", "GESLA3_ALL 2.csv")
     
     if not os.path.isfile(file_gesla3_meta):
         raise FileNotFoundError(f"The 'file_gesla3_meta' file '{file_gesla3_meta}' was not found. "
@@ -544,8 +558,38 @@ def rwsddl_ssh_read_catalog(meta_dict=None):
     return ddl_slev_gdf
 
 
-def cmems_ssh_retrieve_data(row, dir_output, time_min=None, time_max=None, 
-                            level="WARNING", disable_progress_bar=True):
+def gtsm3_era5_cds_ssh_read_catalog():
+    
+    # There is no catalog file available via API, instead we load a text file containing
+    # coordinates of gtsm3-era5 output points (that are available on CDS)
+    url = ("https://raw.githubusercontent.com/VU-IVM/gtsm3-era5-nrt/refs/heads/main/"
+           "04_supplementary_data/GTSM_output_locations_list.csv")
+    station_list_pd = pd.read_csv(url,sep="\t")
+    
+    # generate geom and geodataframe and remove the old columns
+    geom = [Point(x["lon"], x["lat"]) for irow, x in station_list_pd.iterrows()]
+    station_list_gpd = gpd.GeoDataFrame(data=station_list_pd,
+                                        geometry=geom,
+                                        crs='EPSG:4326',
+                                        )
+    drop_list = ["lon","lat"]
+    station_list_gpd = station_list_gpd.drop(drop_list, axis=1)
+    
+    stat_names = ("gtsm3-era5-" + station_list_gpd['station_id'].astype(str) +
+                  "-" + station_list_gpd['station_name'])
+    station_list_gpd["station_name_unique"] = stat_names
+    station_list_gpd["country"] = ""
+    time_start = pd.Timestamp('1950-01-01')
+    time_end = pd.Timestamp('2024-12-31')
+    station_list_gpd["time_min"] = time_start
+    station_list_gpd["time_max"] = time_end
+    station_list_gpd["time_ndays"] = (time_end - time_start).total_seconds()/3600/24
+
+    return station_list_gpd  
+
+
+def cmems_ssh_retrieve_data(row, dir_output, time_min=None, time_max=None,
+                            level="WARNING"):
     """
     Retrieve data from copernicusmarine files service
     Can only retrieve entire files, subsetting is done during reconstruction
@@ -560,21 +604,19 @@ def cmems_ssh_retrieve_data(row, dir_output, time_min=None, time_max=None,
     tempdir = tempfile.gettempdir()
     url_file = row["file_name"]
     
+    prev_lev = CM_LOGGER.level
+    CM_LOGGER.setLevel(level)
     copernicusmarine_credentials()
-    
-    import logging
-    logging.getLogger("copernicus_marine_root_logger").setLevel(level)
     copernicusmarine.get(
         dataset_id=dataset_id,
         dataset_part="history",
-        service="files",
         filter=url_file,
         output_directory=tempdir,
-        overwrite_output_data=True,
-        force_download=True,
+        overwrite=True,
         no_directories=True,
-        disable_progress_bar=disable_progress_bar,
+        disable_progress_bar=True,
         )
+    CM_LOGGER.setLevel(prev_lev)
     
     file_data_org = os.path.join(tempdir, os.path.basename(url_file))
     random_suffix = str(pd.Timestamp.now().microsecond)[0]
@@ -666,11 +708,13 @@ def uhslc_ssh_retrieve_data(row, dir_output, time_min=None, time_max=None):
 @functools.lru_cache
 def gesla3_cache_zipfile(file_gesla3_data=None):
     if file_gesla3_data is None:
-        file_gesla3_data = r"p:\1230882-emodnet_hrsm\data\GESLA3\GESLA3.0_ALL.zip"
-    
+        file_gesla3_data = os.path.join(PDRIVE, "1230882-emodnet_hrsm", "data", "GESLA3", "GESLA3.0_ALL.zip")
+
     if not os.path.isfile(file_gesla3_data):
-        raise FileNotFoundError(f"The 'file_gesla3_data' file '{file_gesla3_data}' was not found. "
-                                "You can download it from https://gesla787883612.wordpress.com/downloads and provide the path")
+        raise FileNotFoundError(
+            f"The 'file_gesla3_data' file '{file_gesla3_data}' was not found. "
+            "You can download it from https://gesla787883612.wordpress.com/"
+            "downloads and provide the path")
     
     gesla3_zip = ZipFile(file_gesla3_data)
     return gesla3_zip
@@ -686,7 +730,12 @@ def gesla3_ssh_retrieve_data(row, dir_output, time_min=None, time_max=None,
     with gesla3_zip.open(file_gesla, "r") as f:
         data = pd.read_csv(f, comment='#', sep="\\s+",
                            names=["date", "time", "sea_level", "qc_flag", "use_flag"],
-                           parse_dates=[[0, 1]], index_col=0)
+                           )
+    # set datetimes as index
+    dates = data.pop("date")
+    times = data.pop("time")
+    data_dt = dates + " " + times
+    data.index = pd.to_datetime(data_dt)
     
     # clean up time duplicates
     data.index.name = 'time'
@@ -815,11 +864,15 @@ def rwsddl_ssh_retrieve_data(row, dir_output, time_min, time_max):
     drop_if_constant = ["WaarnemingMetadata.OpdrachtgevendeInstantieLijst",
                         "WaarnemingMetadata.BemonsteringshoogteLijst",
                         "WaarnemingMetadata.ReferentievlakLijst",
-                        "AquoMetadata_MessageID", 
+                        "AquoMetadata_MessageID",
                         "BioTaxonType", 
-                        "BemonsteringsSoort.Code", 
-                        "Compartiment.Code", "Eenheid.Code", "Grootheid.Code", "Hoedanigheid.Code",
-                        "WaardeBepalingsmethode.Code", "MeetApparaat.Code",
+                        "BemonsteringsSoort.Code",
+                        "Compartiment.Code",
+                        "Eenheid.Code",
+                        "Grootheid.Code",
+                        "Hoedanigheid.Code",
+                        "WaardeBepalingsmethode.Code",
+                        "MeetApparaat.Code",
                         ]
     ds = ddlpy.dataframe_to_xarray(measurements, drop_if_constant)
     
@@ -839,6 +892,83 @@ def rwsddl_ssh_retrieve_data(row, dir_output, time_min, time_max):
     return ds
 
 
+def gtsm3_era5_cds_ssh_retrieve_data(row,
+                                     dir_output,
+                                     time_min=None,
+                                     time_max=None,
+                                     time_freq='10_min',
+                                     ):
+    """
+    Retrieve data from Climate Data Store. Can only retrieve entire files, subsetting
+    for time and stations is done after download. The function checks if the files have
+    already been downloaded to cache.
+    """
+    
+    if time_min is None:
+        time_min = row['time_min']
+    if time_max is None:
+        time_max = row['time_max']
+
+    dir_cache = get_dir_testdata()
+    dir_cache_gtsm = os.path.join(dir_cache,'gtsm3_era5_cds')
+    os.makedirs(dir_cache_gtsm, exist_ok=True)
+
+    # Get a list of all monthly time periods within the time range
+    time_periods = pd.period_range(start=time_min, end=time_max, freq='M')
+    
+    time_freq_cds_str = time_freq.replace("_","")
+    file_pat = os.path.join(dir_cache_gtsm,
+                            f'reanalysis_waterlevel_{time_freq_cds_str}_*_v2.nc',
+                            )
+    # Retrieve data via an API request and extract archive (if not found in the cache)
+    for period in time_periods:
+        period_cds_str = str(period).replace("-","_")
+        filename = file_pat.replace("*", period_cds_str)
+        if os.path.isfile(filename):
+            continue
+
+        print(f'retrieving GTSM3-ERA5-CDS data for {period}')
+        tmp_zipfile = filename.replace(".nc",".zip")
+
+        if time_freq not in ['10_min', 'hourly']:
+            raise ValueError(
+                "time frequency for retrieving gtsm3-era5-cds data should be one of "
+                f"['10_min','hourly'], received '{time_freq}'")
+
+        # prompt for CDS credentials if /.cdsapirc file is not present
+        cds_credentials()
+        # Make connection with CDS via API
+        c = cdsapi.Client() 
+        c.retrieve(
+            'sis-water-level-change-timeseries-cmip6',
+            {
+                'variable': "total_water_level",
+                'experiment': 'reanalysis',
+                'temporal_aggregation': time_freq,
+                'year': str(period.year),
+                'month': str(period.month).zfill(2),
+                'format': 'zip',
+            }, 
+            tmp_zipfile)
+    
+        with ZipFile(tmp_zipfile, 'r') as zip_ref:
+            zip_ref.extractall(dir_cache_gtsm)
+        os.remove(tmp_zipfile)
+
+    # open dataset
+    ds = xr.open_mfdataset(file_pat, data_vars='minimal', join='exact')
+    
+    # slice on time extent
+    ds = ds.sel(time=slice(time_min, time_max))
+
+    # subset stations
+    ds_station = ds.sel(stations=row['station_id']); ds.close()
+    ds_station = ds_station.drop_vars({'station_x_coordinate',
+                                       'station_y_coordinate',
+                                       'stations'})
+    return ds_station
+
+  
 def ssh_catalog_subset(source=None,
                        lon_min=-180, lon_max=180, 
                        lat_min=-90, lat_max=90, 
@@ -857,6 +987,7 @@ def ssh_catalog_subset(source=None,
                    "uhslc-rqds": uhslc_rqds_ssh_read_catalog,
                    "psmsl-gnssir": psmsl_gnssir_ssh_read_catalog,
                    "rwsddl": rwsddl_ssh_read_catalog,
+                   "gtsm3-era5-cds": gtsm3_era5_cds_ssh_read_catalog,
                    }
     
     if source not in ssh_sources.keys():
@@ -902,6 +1033,7 @@ def ssh_retrieve_data(ssh_catalog_gpd, dir_output, time_min=None, time_max=None,
                    "uhslc-rqds": uhslc_ssh_retrieve_data,
                    "psmsl-gnssir": psmsl_gnssir_ssh_retrieve_data,
                    "rwsddl": rwsddl_ssh_retrieve_data,
+                   "gtsm3-era5-cds": gtsm3_era5_cds_ssh_retrieve_data,
                    }
     
     if source not in ssh_sources.keys():

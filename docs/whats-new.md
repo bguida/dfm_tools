@@ -2,6 +2,68 @@
 
 ## UNRELEASED
 
+### Deprecated
+- removed `dfmt.preprocess_woa` since WOA merging fails and is not used in [#1161](https://github.com/Deltares/dfm_tools/pull/1161)
+
+
+## 0.36.0 (2025-03-18)
+
+### Feat
+- improved interpolation and extrapolation in `dfmt.cmems_nc_to_ini()` in [#1152](https://github.com/Deltares/dfm_tools/pull/1152)
+- added `gtsm3-era5-cds` data as a source of observations in `dfmt.ssh_catalog_subset()` and `dfmt.ssh_retrieve_data()` in [#1153](https://github.com/Deltares/dfm_tools/pull/1153).
+
+### Fix
+- improved performance of `dfmt.merge_meteofiles()` by adding xarray arguments and ensuring alignment in [#1148](https://github.com/Deltares/dfm_tools/pull/1148)
+- allow for number coordinate variable in `dfmt.merge_meteofiles()` in [#1157](https://github.com/Deltares/dfm_tools/pull/1157)
+- proper time slicing and out of bounds error of `dfmt.merge_meteofiles()` in [#1149](https://github.com/Deltares/dfm_tools/pull/1149)
+
+
+## 0.35.0 (2025-02-20)
+
+### Feat
+- add constant waterlevel offset with `dfmt.constant_to_bc()` in [#1130](https://github.com/Deltares/dfm_tools/pull/1130)
+- download GSHHS data from github instead in [#1132](https://github.com/Deltares/dfm_tools/pull/1132)
+- support multiple grid refinements via `kwargs` in`dfmt.refine_basegrid()` in [#1136](https://github.com/Deltares/dfm_tools/pull/1136)
+
+### Fix
+- correct ssr conversion factor in `convert_meteo_units()` in [#1134](https://github.com/Deltares/dfm_tools/pull/1134)
+- support for `pathlib.Path` in `file_to_list()` in [#1139](https://github.com/Deltares/dfm_tools/pull/1139)
+- rename new (feb 2025) CDS varnames `avg_ie` and `avg_tprate` back to `mer` and `mtpr` in `dfmt.preprocess_ERA5()` in [#1141](https://github.com/Deltares/dfm_tools/pull/1141)
+
+
+## 0.34.0 (2025-02-05)
+
+### Feat
+- usage of outside time buffer in `dfmt.cmems_nc_to_ini()` so noon-centered or monthly timestamps are also supported in [#1087](https://github.com/Deltares/dfm_tools/pull/1087)
+- correct CMEMS daily mean data ("P1D-m") from midnight to noon by adding a 12-hour offset in `dfmt.download_CMEMS()` in [#1088](https://github.com/Deltares/dfm_tools/pull/1088)
+- updated cdsapi request to new format in [#1103](https://github.com/Deltares/dfm_tools/pull/1103)
+- added UHSLC backup for GSHHS data in [#1112](https://github.com/Deltares/dfm_tools/pull/1112)
+- auto download CMEMS phyc reanalysis from monthly mean dataset and auto convert to freq=M in [#622](https://github.com/Deltares/dfm_tools/issues/622)
+
+### Fix
+- made p-drive paths for tide models and gesla3 work on linux also in [#1083](https://github.com/Deltares/dfm_tools/pull/1083) and [#1085](https://github.com/Deltares/dfm_tools/pull/1085)
+- support for different face dimension names in `dfmt.enrich_rst_with_map` in [#1114](https://github.com/Deltares/dfm_tools/pull/1114)
+
+
+## 0.33.0 (2025-01-20)
+
+### Feat
+- optimized performance for getting CMEMS time extents and spatial buffer in [#1059](https://github.com/Deltares/dfm_tools/pull/1059)
+- replaced buffer and floor/ceil with copernicusmarine `coordinates_selection_method`, this deprecated the `buffer` argument for `dfmt.download_CMEMS()` [#1061](https://github.com/Deltares/dfm_tools/pull/1061)
+- inclusive selection of outside timesteps in `open_prepare_dataset()` and thus in `cmems_nc_to_bc()` in [#1062](https://github.com/Deltares/dfm_tools/pull/1062)
+
+### Fix
+- fixed inexact latlon bbox in modelbuilder with `dfmt.meshkernel_get_bbox()` in [#1067](https://github.com/Deltares/dfm_tools/pull/1067)
+- included polyfile basename in bc-files from tide and cmems to prevent overwrite with multiple polyfiles in [#1071](https://github.com/Deltares/dfm_tools/pull/1071)
+- renamed `ext_bnd` argument to `ext_new` in `dfmt.cmems_nc_to_bc()` for consistency in [#1071](https://github.com/Deltares/dfm_tools/pull/1071)
+
+
+## 0.32.0 (2025-01-14)
+
+### Feat
+- updated to copernicusmarine v2 in [#1046](https://github.com/Deltares/dfm_tools/pull/1046)
+- optimized CMEMS download performance in [#1049](https://github.com/Deltares/dfm_tools/pull/1049)
+
 
 ## 0.31.0 (2024-10-28)
 

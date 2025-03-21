@@ -3,21 +3,35 @@ import pandas as pd
 from pathlib import Path
 import xarray as xr
 from dfm_tools.errors import OutOfRangeError
+from dfm_tools.interpolate_grid2bnd import _ds_sel_time_outside
 import cdsapi
 import copernicusmarine
 from copernicusmarine.core_functions.credentials_utils import InvalidUsernameOrPassword
 import cftime
 import getpass
-import shutil
-import subprocess
-import sys
 from requests import HTTPError
+import logging
 
 __all__ = [
     "download_ERA5",
     "download_CMEMS",
     "download_OPeNDAP",
 ]
+
+logger = logging.getLogger(__name__)
+
+COPERNICUSMARINE_OPTIMIZE_ARGS = dict(
+    # speed up copernicusmarine.open_dataset() with the following arguments
+    # this optimizes chunking for downloading with daily frequency
+    # https://github.com/Deltares/dfm_tools/issues/1033
+    # also relevant to get time bounds
+    # https://github.com/Deltares/dfm_tools/issues/1058
+    service="arco-geo-series",
+    chunk_size_limit=None,
+    # prevent the need for buffering time/spatial extent
+    # https://github.com/Deltares/dfm_tools/issues/1050
+    coordinates_selection_method='outside',
+)
 
 
 def download_ERA5(varkey,
@@ -53,14 +67,20 @@ def download_ERA5(varkey,
                       'u10n':'10m_u_component_of_neutral_wind',
                       'v10':'10m_v_component_of_wind',
                       'v10n':'10m_v_component_of_neutral_wind',
-                      'mer':'mean_evaporation_rate',
+                      # mer and mtpr are now called avg_ie and avg_tprate
+                      # this is reverted in dfmt.preprocess_ERA5() after fixing
+                      # https://github.com/Deltares/dfm_tools/issues/1140
+                      'mer':'mean_evaporation_rate', 
                       'mtpr':'mean_total_precipitation_rate',
-                      'p140209':'air_density_over_the_oceans', # TODO: paramID might be replaced with shortname rhoao: https://jira.ecmwf.int/plugins/servlet/desk/portal/4/SD-82050
+                      'rhoao':'air_density_over_the_oceans',
                       }
     if varkey not in variables_dict.keys(): #TODO: how to get list of available vars? mean_sea_level_pressure and msl both return a dataset with msl varkey, but standard_name air_pressure_at_mean_sea_level returns an error
         raise KeyError(f'"{varkey}" not available, choose from: {", ".join(variables_dict.keys())}')
     
     period_range = pd.period_range(date_min,date_max,freq='M')
+    if len(period_range) == 0:
+        raise ValueError(f"requested time extents ({date_min} to {date_max}) "
+                         "resulted in empty period_range")
     print(f'retrieving data from {period_range[0]} to {period_range[-1]} (freq={period_range.freq})')
     
     #make sure the data fully covers the desired spatial extent. Download 1 additional grid cell (resolution is 1/4 degrees) in both directions
@@ -87,9 +107,15 @@ def download_ERA5(varkey,
                         'time':[f'{x:02d}:00' for x in range(0,23+1)], #all times/hours
                         'area':[latitude_max,longitude_min,latitude_min,longitude_max], # north, west, south, east. default: global - option not available through the Climate Data Store (CDS) web interface (for cmip data)
                         #'grid': [1.0, 1.0], # latitude/longitude grid: east-west (longitude) and north-south resolution (latitude). default: 0.25 x 0.25 - option not available through the Climate Data Store (CDS) web interface
-                        'format':'netcdf'}
+                        "data_format": "netcdf",
+                        "download_format": "unarchived",
+                        }
         
-        c.retrieve(name='reanalysis-era5-single-levels', request=request_dict, target=file_out)
+        resp = c.retrieve(
+            name='reanalysis-era5-single-levels', 
+            request=request_dict,
+            )
+        resp.download(target=file_out)
 
 
 def cds_credentials():
@@ -188,33 +214,42 @@ def cds_remove_credentials_raise(reason=''):
 def download_CMEMS(varkey,
                    longitude_min, longitude_max, latitude_min, latitude_max, 
                    date_min, date_max, freq='D',
-                   dataset_id=None, buffer=None,
+                   dataset_id=None,
                    dir_output='.', file_prefix='', overwrite=False):
     """
+    Download CMEMS data by providing varkey and optional dataset_id. If no
+    dataset_id is provided, it is automatically derived based on the varkey
+    and the requested period. For daily mean data, the dataset is automatically
+    shifted with 12 hours to convert start-of-interval to center-of-interval
+    timestamps.
+    
+    The requested spatial and time extents are automatically buffered to make
+    sure all requested values are included in the returned dataset. This
+    behaviour is more inclusive than the default xarray.Dataset.sel() method.
+    
+    The data is downloaded in files per day or month, depending on the freq
+    argument. When downloading monthly or yearly means make sure not to request
+    a higher freq, since that would result in many empty files.
+    
+    More info about copernicusmarine toolbox available at:
     https://help.marine.copernicus.eu/en/articles/8283072-copernicus-marine-toolbox-api-subset
+    
     """
-    copernicusmarine_remove_manual_credentials_file()
     copernicusmarine_credentials()
     
-    # We floor/ceil the input timestamps to make sure we
-    # subset enough data in case of data with daily timesteps.
-    date_min = pd.Timestamp(date_min).floor('1d')
-    date_max = pd.Timestamp(date_max).ceil('1d')
-
     if dataset_id is None:
         dataset_id = copernicusmarine_get_dataset_id(varkey, date_min, date_max)
-    if buffer is None:
-        buffer = copernicusmarine_get_buffer(dataset_id)
-    # date_range with same start as stoptime is a bit tricky so we limit freqs: https://github.com/Deltares/dfm_tools/issues/720
-    if freq not in ["D","M"]:
-        raise ValueError(f"freq should be 'D' or 'M', not {freq}")
     
-    # make sure the data fully covers more than the desired spatial extent
-    longitude_min -= buffer
-    longitude_max += buffer
-    latitude_min  -= buffer
-    latitude_max  += buffer
-
+    # date_range with same start as stoptime is a bit tricky so we limit freqs
+    # https://github.com/Deltares/dfm_tools/issues/720
+    if freq not in ["D","M","Y"]:
+        raise ValueError(f"freq should be D/M/Y, not {freq}")
+    # prevent daily freq for datasets with monthly intervals
+    # to avoid downloading empty files
+    if "_P1M" in dataset_id and freq=="D":
+        freq = "M"
+    print(f"downloading {varkey} from {dataset_id} with freq={freq}")
+    
     dataset = copernicusmarine.open_dataset(
          dataset_id = dataset_id,
          variables = [varkey],
@@ -222,39 +257,48 @@ def download_CMEMS(varkey,
          maximum_longitude = longitude_max,
          minimum_latitude = latitude_min,
          maximum_latitude = latitude_max,
-         start_datetime = date_min,
-         end_datetime = date_max,
+         **COPERNICUSMARINE_OPTIMIZE_ARGS,
     )
+    
+    # possibly shift times with 12 hours (to center-of-interval times)
+    dataset = copernicusmarine_dataset_timeshift(ds=dataset, dataset_id=dataset_id)
+    
+    # slice to outside times after opening dataset and correcting times
+    dataset = _ds_sel_time_outside(ds=dataset, tstart=date_min, tstop=date_max)
     
     Path(dir_output).mkdir(parents=True, exist_ok=True)
     
-    if freq is None:
-        date_str = f"{date_min.strftime('%Y%m%d')}_{date_max.strftime('%Y%m%d')}"
+    # get time extent from dataset, it can be different than requested
+    # due to coordinates_selection_method='outside'
+    start_datetime = dataset.time.isel(time=0).values
+    end_datetime = dataset.time.isel(time=-1).values
+    period_range = pd.period_range(start_datetime, end_datetime, freq=freq)
+    for date in period_range:
+        date_str = str(date)
         name_output = f'{file_prefix}{varkey}_{date_str}.nc'
-        output_filename = Path(dir_output,name_output)
+        output_filename = Path(dir_output, name_output)
         if output_filename.is_file() and not overwrite:
-            print(f'"{name_output}" found and overwrite=False, returning.')
-            return
-        print(f'xarray writing netcdf file: {name_output}')
-        dataset.to_netcdf(output_filename)
-    else:
-        period_range = pd.period_range(date_min,date_max,freq=freq)
-        for date in period_range:
-            date_str = str(date)
-            name_output = f'{file_prefix}{varkey}_{date_str}.nc'
-            output_filename = Path(dir_output,name_output)
-            if output_filename.is_file() and not overwrite:
-                print(f'"{name_output}" found and overwrite=False, continuing.')
-                continue
-            dataset_perperiod = dataset.sel(time=slice(date_str, date_str))
-            print(f'xarray writing netcdf file: {name_output}')
-            dataset_perperiod.to_netcdf(output_filename)
+            print(f'"{name_output}" found and overwrite=False, continuing.')
+            continue
+        dataset_perperiod = dataset.sel(time=slice(date_str, date_str))
+        print(f'writing netcdf file: {name_output}: ',end='')
+        dtstart = pd.Timestamp.now()
+        dataset_perperiod.to_netcdf(output_filename)
+        print(f'{(pd.Timestamp.now()-dtstart).total_seconds():.2f} sec')
 
 
 def copernicusmarine_get_product(date_min, date_max, vartype):
+    """
+    retrieve the time extents of reanalysis, reanalysis-interim and forecast
+    products. The time extents of phy and bio can be different, so they have
+    to be retrieved for both.
+    """
+    
     assert vartype in ['phy','bio']
     
-    # the time extents between phy and bio can be different so we have to retrieve them both
+    # convert requested times to pandas timestamps for >= and <= comparison
+    date_min = pd.Timestamp(date_min)
+    date_max = pd.Timestamp(date_max)
     
     # time extents as global variables, so they only has to be retreived once per download run (otherwise once per variable)
     global phy_reanalysis_tstart, phy_reanalysis_tstop
@@ -345,27 +389,16 @@ def copernicusmarine_get_dataset_id(varkey, date_min, date_max):
         elif product == 'reanalysis-interim': # reanalysis-interim: https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_BGC_001_029/description
             dataset_id = 'cmems_mod_glo_bgc_myint_0.25deg_P1D-m'
         else: # reanalysis: https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_BGC_001_029/description
-            dataset_id = 'cmems_mod_glo_bgc_my_0.25deg_P1D-m'
+            if varkey in ['chl', 'no3', 'nppv', 'o2', 'po4', 'si']:
+                dataset_id = 'cmems_mod_glo_bgc_my_0.25deg_P1D-m'
+            else:
+                # phyc/fe/ph/spco2 are not available in daily mean dataset
+                # use monthly mean dataset instead
+                # https://github.com/Deltares/dfm_tools/issues/622
+                dataset_id = 'cmems_mod_glo_bgc_my_0.25deg_P1M-m'
     else:
         raise ValueError(f"unknown vartype for cmems: {vartype}")
     return dataset_id
-
-
-def copernicusmarine_get_buffer(dataset_id):
-    ds = copernicusmarine.open_dataset(dataset_id=dataset_id)
-    try:
-        resolution = ds.latitude.attrs["step"]
-        buffer = 2 * resolution
-    except (AttributeError, KeyError, TypeError):
-        print("failed to automatically derive a buffer from the dataset, using buffer=0.5")
-        buffer = 0.5
-    return buffer
-
-
-def copernicusmarine_remove_manual_credentials_file():
-    cmems_file_old = os.path.expanduser("~/CMEMS_credentials.txt")
-    if os.path.isfile(cmems_file_old):
-        os.remove(cmems_file_old)
 
 
 def copernicusmarine_credentials():
@@ -373,28 +406,44 @@ def copernicusmarine_credentials():
     Login at copernicusmarine if user not logged in yet.
     Works via prompt, environment variables or credentials file.
     """
-    print("Downloading CMEMS data requires a Copernicus Marine username and password, "
-          "sign up for free at: https://data.marine.copernicus.eu/register.")
-    success = copernicusmarine.login(skip_if_user_logged_in=True)
+    # first check whether (valid) credentials are already present
+    success = copernicusmarine.login(check_credentials_valid=True)
+    if success:
+        return
+
+    # call the login function if no (valid) credentials present
+    success = copernicusmarine.login()
+
+    # raise if credentials are incorrect
     if not success:
         raise InvalidUsernameOrPassword("Invalid credentials, please try again")
 
 
-def copernicusmarine_reset(update_package=False, remove_folder=False, overwrite_cache=True):
-    if update_package:
-        print("reset copernicusmarine: updating copernicusmarine")
-        subprocess.check_call(f"{sys.executable} -m pip install copernicusmarine -U")
-    if remove_folder:
-        dir_copernicusmarine = os.path.expanduser("~/.copernicusmarine")
-        print(f"reset copernicusmarine: removing {dir_copernicusmarine}, you will have to login again.")
-        shutil.rmtree(dir_copernicusmarine, ignore_errors=True)
-    if overwrite_cache:
-        print("reset copernicusmarine: overwriting copernicusmarine metadata cache (takes some time)")
-        subprocess.run("copernicusmarine describe --overwrite-metadata-cache")
+def copernicusmarine_dataset_timeshift(ds, dataset_id):
+    """
+    correct daily means from start-of-interval to center-of-interval times.
+    Only the daily data is currently corrected with an offset of 12 hours.
+    This does not shift yearly, monthly, hourly, 3hourly or 6hourly data.
+    Also daily averaged datasets called *-d are not corrected.
+    https://help.marine.copernicus.eu/en/articles/6820094-how-is-defined-the-nomenclature-of-copernicus-marine-data
+    """
+    if "P1D-m" in dataset_id or dataset_id.endswith("rean-d"):
+        # TODO: remove rean-d https://github.com/Deltares/dfm_tools/issues/1090
+        # check if dataset times are indeed at midnight (start-of-interval)
+        assert (ds["time"].to_pandas().dt.hour == 0).all()
+        # add offset to correct from midnight to noon (center-of-interval)
+        print("corrected daily averaged dataset from midnight to noon by "
+              "adding a 12-hour offset.")
+        ds["time"] = ds["time"] + pd.Timedelta(hours=12)
+    return ds
 
 
 def copernicusmarine_dataset_timerange(dataset_id):
-    ds = copernicusmarine.open_dataset(dataset_id=dataset_id)
+    ds = copernicusmarine.open_dataset(
+        dataset_id=dataset_id,
+        **COPERNICUSMARINE_OPTIMIZE_ARGS
+        )
+    ds = copernicusmarine_dataset_timeshift(ds, dataset_id)
     ds_tstart = pd.Timestamp(ds.time.isel(time=0).values)
     ds_tstop = pd.Timestamp(ds.time.isel(time=-1).values)
     return ds_tstart, ds_tstop

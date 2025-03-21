@@ -32,6 +32,13 @@ __all__ = ["get_conversion_dict",
 
 logger = logging.getLogger(__name__)
 
+if os.name == "nt":
+    # windows drive letter should include trailing slash
+    # https://github.com/Deltares/dfm_tools/issues/1084
+    PDRIVE = "p:/"
+else:
+    PDRIVE = "/p"
+
 
 def get_conversion_dict(ncvarname_updates={}):
     
@@ -145,8 +152,8 @@ def ext_add_boundary_object_per_polyline(ext_new:hcdfm.ExtModel, boundary_object
 
 def interpolate_tide_to_bc(ext_new: hcdfm.ExtModel, tidemodel, file_pli, component_list=None, load=True):
     # read polyfile as geodataframe
-    polyfile_object = hcdfm.PolyFile(file_pli)
-    gdf_points = PolyFile_to_geodataframe_points(polyfile_object)
+    polyfile_obj = hcdfm.PolyFile(file_pli)
+    gdf_points = PolyFile_to_geodataframe_points(polyfile_obj)
     
     # interpolate tidal components to plipoints
     data_interp = interpolate_tide_to_plipoints(tidemodel=tidemodel, gdf_points=gdf_points, 
@@ -155,7 +162,8 @@ def interpolate_tide_to_bc(ext_new: hcdfm.ExtModel, tidemodel, file_pli, compone
     # convert interpolated xarray.Dataset to hydrolib ForcingModel and save as bc file
     ForcingModel_object = plipointsDataset_to_ForcingModel(plipointsDataset=data_interp)
     dir_output = os.path.dirname(file_pli)
-    file_bc_out = os.path.join(dir_output,f'tide_{tidemodel}.bc')
+    file_pli_name = polyfile_obj.filepath.stem
+    file_bc_out = os.path.join(dir_output,f'tide_{tidemodel}_{file_pli_name}.bc')
     ForcingModel_object.save(filepath=file_bc_out)
     
     # generate hydrolib-core Boundary object to be appended to the ext file
@@ -204,10 +212,10 @@ def interpolate_tide_to_plipoints(tidemodel, gdf_points, component_list=None, lo
     empty docstring
     """
     
-    dir_pattern_dict = {'FES2014': Path(r'P:\metocean-data\licensed\FES2014','*.nc'), #ocean_tide_extrapolated
-                        'FES2012': Path(r'P:\metocean-data\open\FES2012\data','*_FES2012_SLEV.nc'), #is eigenlijk ook licensed
-                        'EOT20': Path(r'P:\metocean-data\open\EOT20\ocean_tides','*_ocean_eot20.nc'),
-                        'GTSMv4.1': Path(r'p:\1230882-emodnet_hrsm\GTSMv3.0EMODnet\EMOD_MichaelTUM_yearcomponents\GTSMv4.1_yeartide_2014_2.20.06\compare_fouhis_fouxyz_v4','GTSMv4.1_tide_2014_*_rasterized.nc'),
+    dir_pattern_dict = {'FES2014': Path(PDRIVE, 'metocean-data', 'licensed', 'FES2014', '*.nc'), #ocean_tide_extrapolated
+                        'FES2012': Path(PDRIVE, 'metocean-data', 'open', 'FES2012', 'data','*_FES2012_SLEV.nc'), #is eigenlijk ook licensed
+                        'EOT20': Path(PDRIVE, 'metocean-data', 'open', 'EOT20', 'ocean_tides','*_ocean_eot20.nc'),
+                        'GTSMv4.1': Path(PDRIVE, '1230882-emodnet_hrsm', 'GTSMv3.0EMODnet', 'EMOD_MichaelTUM_yearcomponents', 'GTSMv4.1_yeartide_2014_2.20.06', 'compare_fouhis_fouxyz_v4', 'GTSMv4.1_tide_2014_*_rasterized.nc'),
                         'GTSMv4.1_opendap': 'https://opendap.deltares.nl/thredds/dodsC/opendap/deltares/GTSM/GTSMv4.1_tide/GTSMv4.1_tide_2014_*_rasterized.nc',
                         'tpxo80_opendap':'https://opendap.deltares.nl/thredds/dodsC/opendap/deltares/delftdashboard/tidemodels/tpxo80/tpxo80.nc',
                         }
@@ -381,13 +389,13 @@ def open_prepare_dataset(dir_pattern, quantity, tstart, tstop, conversion_dict=N
     # retrieve var(s) (after potential longitude conversion)
     data_xr_vars = data_xr[[quantity]]
     
-    # slice time
-    check_time_extent(data_xr, tstart, tstop)
-    data_xr_vars = data_xr_vars.sel(time=slice(tstart,tstop))
-    # check time extent again to avoid issues with eg midday data being 
-    # sliced to midnight times: https://github.com/Deltares/dfm_tools/issues/707
-    check_time_extent(data_xr_vars, tstart, tstop)
-    
+    # slice dataset to times outside of requested time range
+    data_xr_vars = _ds_sel_time_outside(
+        ds=data_xr_vars,
+        tstart=tstart,
+        tstop=tstop,
+        )
+        
     #optional refdate changing
     if refdate_str is not None:
         if 'long_name' in data_xr_vars.time.attrs: #for CMEMS it is 'hours since 1950-01-01', which would be wrong now #TODO: consider also removing attrs for depth/varname, since we would like to have salinitybnd/waterlevel instead of Salinity/sea_surface_height in xr plots?
@@ -395,6 +403,21 @@ def open_prepare_dataset(dir_pattern, quantity, tstart, tstop, conversion_dict=N
         data_xr_vars.time.encoding['units'] = refdate_str
     
     return data_xr_vars
+
+
+def _ds_sel_time_outside(ds: xr.Dataset, tstart, tstop) -> xr.Dataset:
+    """
+    Subset the dataset on time, making sure the requested times are always
+    included. If there is no exact match for start/end times, the previous/next
+    timestamp is taken as an extreme.
+    Inspired by copernicusmarine.download_functions.subset_xarray.py
+    """    
+    check_time_extent(ds, tstart, tstop)
+    external_minimum = ds.sel(time=tstart, method="pad")
+    external_maximum = ds.sel(time=tstop, method="backfill")
+    time_slice = slice(external_minimum.time.values, external_maximum.time.values)
+    ds_sel = ds.sel(time=time_slice) 
+    return ds_sel
 
 
 def interp_regularnc_to_plipointsDataset(data_xr_reg, gdf_points, load=True):

@@ -13,7 +13,6 @@ import hydrolib.core.dflowfm as hcdfm
 import xarray as xr
 import numpy as np
 from dfm_tools.modelbuilder import get_quantity_list, get_ncvarname
-from test_interpolate_grid2bnd import cmems_dataset_4times # TODO: create fixture
 
 
 @pytest.mark.unittest
@@ -38,12 +37,119 @@ def test_get_ncvarname_list():
     assert "quantity 'nonexistingbnd' not in conversion_dict" in str(e.value)
 
 
+@pytest.mark.unittest
+def test_constant_to_bc(tmp_path):
+    # generate pli with two polylines
+    file_pli = tmp_path / "test.pli"
+    with open(file_pli,'w') as f:
+        f.write("""name1
+        2    2
+        1.0    2.0
+        3.0    4.0
+        name2
+        2    2
+        1.0    2.0
+        3.0    4.0
+        """)
+    # generate ext and add constant forcing
+    ext_new = hcdfm.ExtModel()
+    _ = dfmt.constant_to_bc(ext_new=ext_new, file_pli=file_pli, constant=0.5)
+    # check file existence
+    file_bc = tmp_path / "waterlevelbnd_constant_test.bc"
+    assert os.path.exists(file_bc)
+    # check contents
+    forcing_obj = hcdfm.ForcingModel(file_bc)
+    assert len(forcing_obj.forcing) == 2
+    assert np.allclose(forcing_obj.forcing[0].datablock, [[0.5]])
+    assert np.allclose(forcing_obj.forcing[1].datablock, [[0.5]])
+
+
+@pytest.mark.parametrize("timecase", [pytest.param(x, id=x) for x in ['midnight','noon','monthly']])
 @pytest.mark.systemtest
-def test_cmems_nc_to_ini_midnight_centered(tmp_path):
-    ds1 = cmems_dataset_4times().isel(time=slice(None,2))
-    ds1["time"] = ds1["time"] + pd.Timedelta(hours=12)
-    ds2 = cmems_dataset_4times().isel(time=slice(2,None))
-    ds2["time"] = ds2["time"] + pd.Timedelta(hours=12)
+def test_cmems_nc_to_bc(tmp_path, timecase, cmems_dataset_4times):
+    """
+    tests for midnight-centered data, noon-centered data and monthly timestamped data
+    """
+    file_pli = os.path.join(tmp_path,'test_model.pli')
+    with open(file_pli,'w') as f:
+        f.write("""name
+                    2    2
+                    -9.6   42.9
+                    -9.5   43.0
+                    """)
+    
+    ds = cmems_dataset_4times
+    if timecase == "midnight":
+        ds["time"] = ds["time"] + pd.Timedelta(hours=12)
+    elif timecase == "monthly":
+        ds["time"] = [pd.Timestamp("2019-11-01"),
+                      pd.Timestamp("2019-12-01"),
+                      pd.Timestamp("2020-01-01"),
+                      pd.Timestamp("2020-02-01")]
+    
+    dir_pattern = os.path.join(tmp_path, "temp_cmems_4day_so.nc")
+    file_nc = dir_pattern
+    ds.to_netcdf(file_nc)
+    
+    ext_new = hcdfm.ExtModel()
+    
+    ext_new = dfmt.cmems_nc_to_bc(ext_new=ext_new,
+                                  list_quantities=["salinitybnd"],
+                                  tstart="2020-01-01",
+                                  tstop="2020-01-03",
+                                  file_pli=file_pli,
+                                  dir_pattern=dir_pattern,
+                                  dir_output=tmp_path,
+                                  )
+    
+    file_expected = tmp_path / "salinitybnd_CMEMS_test_model.bc"
+        
+    if timecase == "midnight":
+        times_expected =  [
+            '2020-01-01 00:00:00',
+            '2020-01-02 00:00:00',
+            '2020-01-03 00:00:00',
+            ]
+    elif timecase == "noon":
+        times_expected =  [
+            '2019-12-31 12:00:00',
+            '2020-01-01 12:00:00',
+            '2020-01-02 12:00:00',
+            '2020-01-03 12:00:00',
+            ]
+    elif timecase == "monthly":
+        times_expected =  ['2020-01-01 00:00:00', '2020-02-01 00:00:00']
+    
+    assert os.path.exists(file_expected)
+    forcing_obj = hcdfm.ForcingModel(file_expected)
+    ds_out = dfmt.forcinglike_to_Dataset(forcing_obj.forcing[0])
+    actual_times = ds_out.time.to_pandas().dt.strftime("%Y-%m-%d %H:%M:%S").tolist()
+    assert actual_times == times_expected
+    
+    assert "salinitybnd" in ds_out.data_vars
+    assert ds_out.salinitybnd.isnull().sum().load() == 0
+    
+    # check whether the cmems depth definition comes trough
+    assert 'z' in ds_out.coords
+    depths_expected = np.array([-0.494025, -1.541375, -2.645669, -3.819495, -5.078224])
+    assert np.allclose(ds_out['z'].to_numpy(), depths_expected)
+    assert ds_out['z'].attrs['positive'] == 'up'
+
+
+@pytest.mark.parametrize("timecase", [pytest.param(x, id=x) for x in ['midnight','noon','monthly']])
+@pytest.mark.systemtest
+def test_cmems_nc_to_ini(tmp_path, timecase, cmems_dataset_4times):
+    """
+    tests for midnight-centered data, noon-centered data and monthly timestamped data
+    """
+    ds1 = cmems_dataset_4times.isel(time=slice(None,2))
+    ds2 = cmems_dataset_4times.isel(time=slice(2,None))
+    if timecase == "midnight":
+        ds1["time"] = ds1["time"] + pd.Timedelta(hours=12)
+        ds2["time"] = ds2["time"] + pd.Timedelta(hours=12)
+    elif timecase == "monthly":
+        ds1["time"] = [pd.Timestamp("2019-11-01"), pd.Timestamp("2019-12-01")]
+        ds2["time"] = [pd.Timestamp("2020-01-01"), pd.Timestamp("2020-02-01")]
     
     dir_pattern = os.path.join(tmp_path, "temp_cmems_2day_*.nc")
     file_nc1 = dir_pattern.replace("*","so_p1")
@@ -67,8 +173,13 @@ def test_cmems_nc_to_ini_midnight_centered(tmp_path):
     
     file_expected = tmp_path / "nudge_salinity_temperature_2020-01-01_00-00-00.nc"
     
-    times_expected =  ['2020-01-01 00:00:00', '2020-01-02 00:00:00']
-    
+    if timecase == "midnight":
+        times_expected =  ['2020-01-01 00:00:00', '2020-01-02 00:00:00']
+    elif timecase == "noon":
+        times_expected =  ['2019-12-31 12:00:00', '2020-01-01 12:00:00']
+    elif timecase == "monthly":
+        times_expected =  ['2020-01-01 00:00:00', '2020-02-01 00:00:00']
+        
     assert os.path.exists(file_expected)
     ds_out = xr.open_dataset(file_expected)
     
@@ -84,6 +195,56 @@ def test_cmems_nc_to_ini_midnight_centered(tmp_path):
     depths_expected = np.array([-0.494025, -1.541375, -2.645669, -3.819495, -5.078224])
     assert np.allclose(ds_out['depth'].to_numpy(), depths_expected)
     assert ds_out['depth'].attrs['positive'] == 'up'
+
+
+@pytest.mark.systemtest
+def test_cmems_nc_to_ini_tracer(tmp_path, cmems_dataset_4times):
+    """
+    coverage for initialtracer
+    """
+    ds = cmems_dataset_4times
+    ds = ds.rename({"so":"no3"})
+    file_nc = os.path.join(tmp_path, "temp_cmems_4day_no3.nc")
+    ds.to_netcdf(file_nc)
+    
+    ext_old = hcdfm.ExtOldModel()
+    
+    ext_old = dfmt.cmems_nc_to_ini(ext_old=ext_old,
+                                   dir_output=tmp_path,
+                                   list_quantities=["tracerbndNO3"],
+                                   tstart="2020-01-01",
+                                   dir_pattern=file_nc)
+    
+    file_expected = tmp_path / "initialtracerNO3_2020-01-01_00-00-00.nc"
+    
+    times_expected =  ['2019-12-31 12:00:00', '2020-01-01 12:00:00']
+        
+    assert os.path.exists(file_expected)
+    ds_out = xr.open_dataset(file_expected)
+    
+    times_actual = ds_out.time.to_pandas().dt.strftime("%Y-%m-%d %H:%M:%S").tolist()
+    assert times_expected == times_actual
+    
+    assert "initialtracerNO3" in ds_out.data_vars
+    assert ds_out.initialtracerNO3.isnull().sum().load() == 0
+    assert 'depth' in ds_out.coords
+
+
+@pytest.mark.unittest
+def test_cmems_nc_to_ini_skipped():
+    list_quantities = ["temperaturebnd",
+                       "ux",
+                       "uxuyadvectionvelocitybnd",
+                       "nonexisting",
+                       ]
+    
+    _ = dfmt.cmems_nc_to_ini(
+        ext_old=None, # dummy since it is not reached
+        dir_output=None, # dummy since it is not reached
+        list_quantities=list_quantities,
+        tstart="2020-01-01",
+        dir_pattern=None, # dummy since it is not reached
+        )
 
 
 @pytest.mark.unittest
@@ -201,4 +362,3 @@ def test_preprocess_merge_meteofiles_era5_unsupported_varlist(tmp_path, ds_era5_
                                                         dir_output=tmp_path,
                                                         time_slice=slice(date_min, date_max))
     assert "is not supported by dfmt.preprocess_merge_meteofiles_era5" in str(e.value)
-
