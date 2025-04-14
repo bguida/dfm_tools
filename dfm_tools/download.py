@@ -400,6 +400,65 @@ def copernicusmarine_get_dataset_id(varkey, date_min, date_max):
         raise ValueError(f"unknown vartype for cmems: {vartype}")
     return dataset_id
 
+def copernicusmarine_get_MED_dataset_id(varkey, date_min, date_max):
+    #TODO: maybe get dataset_id from 'copernicusmarine describe --include-datasets --contains <search_token>'
+    
+    if varkey in ['bottomT','tob','mlotst','siconc','sithick','so','thetao','uo','vo','usi','vsi','zos']: #for physchem
+        vartype = 'phy'
+    elif varkey in ['nppv','o2','talk','dissic','ph','spco2','no3','po4','si','fe','chl','phyc']: # for bio
+        vartype = 'bio'
+    else:
+        raise KeyError(f"unknown varkey for cmems: {varkey}")
+    
+    product = copernicusmarine_get_product(date_min, date_max, vartype)
+    
+    if vartype == 'phy': #for physchem
+        # resolution is 1/24 degrees in lat/lon dimension, but a bit more/less in alternating cells
+        if product == 'analysisforecast': # forecast: https://data.marine.copernicus.eu/product/MEDSEA_ANALYSISFORECAST_PHY_006_013/description
+            if varkey in ['uo','vo']: # anfc datset is splitted over multiple urls
+                dataset_id = 'cmems_mod_med_phy-cur_anfc_4.2km-3D_PT1H-m'
+            elif varkey in ['so']:
+                dataset_id = 'cmems_mod_med_phy-sal_anfc_4.2km-3D_PT1H-m'
+            elif varkey in ['thetao']:
+                dataset_id = 'cmems_mod_med_phy-tem_anfc_4.2km-3D_PT1H-m'
+            else:
+                dataset_id = 'cmems_mod_med_phy-cur_anfc_4.2km-3D_PT1H-m'
+        else: # reanalysis: https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_PHY_001_030/description
+            if varkey in ['uo','vo']: # anfc datset is splitted over multiple urls
+                dataset_id = 'med-cmcc-cur-rean-d'
+            elif varkey in ['so']:
+                dataset_id = 'med-cmcc-sal-rean-d'
+            elif varkey in ['thetao']:
+                dataset_id = 'med-cmcc-tem-rean-d'
+    elif vartype == 'bio': # for bio
+        # resolution is 1/24 degrees
+        if product == 'analysisforecast': # forecast: https://data.marine.copernicus.eu/product/GLOBAL_ANALYSISFORECAST_BGC_001_028/description
+            if varkey in ['nppv','o2']:
+                dataset_id = 'cmems_mod_med_bgc-bio_anfc_4.2km_P1D-m'
+            elif varkey in ['talk','dissic','ph']:
+                dataset_id = 'cmems_mod_med_bgc-car_anfc_4.2km_P1D-m'
+            elif varkey in ['spco2']:
+                dataset_id = 'cmems_mod_med_bgc-co2_anfc_4.2km_P1D-m'
+            elif varkey in ['no3','po4','si','fe']:
+                dataset_id = 'cmems_mod_med_bgc-nut_anfc_4.2km_P1D-m'
+            elif varkey in ['chl','phyc']:
+                dataset_id = 'cmems_mod_med_bgc-pft_anfc_4.2km_P1D-m'
+        else: # reanalysis: https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_BGC_001_029/description
+            dataset_id = 'cmems_mod_glo_bgc_my_0.25deg_P1D-m'
+            if varkey in ['nppv','o2']:
+                dataset_id = 'med-ogs-bio-rean-d'
+            elif varkey in ['talk','dissic','ph']:
+                dataset_id = 'med-ogs-car-rean-d'
+            elif varkey in ['spco2']:
+                dataset_id = 'med-ogs-co2-rean-d'
+            elif varkey in ['no3','po4','si','fe']:
+                dataset_id = 'med-ogs-nut-rean-d'
+            elif varkey in ['chl','phyc']:
+                dataset_id = 'med-ogs-pft-rean-d'    
+    else:
+        raise ValueError(f"unknown vartype for cmems: {vartype}")
+    return dataset_id
+
 
 def copernicusmarine_credentials():
     """
