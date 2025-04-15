@@ -502,8 +502,8 @@ def copernicusmarine_credentials():
     #success = copernicusmarine.login(skip_if_user_logged_in=True)
     if not copernicusmarine.login(check_credentials_valid=True):
         copernicusmarine.login()
-    if not success:
-        raise InvalidUsernameOrPassword("Invalid credentials, please try again")
+    #if not success:
+    #   raise InvalidUsernameOrPassword("Invalid credentials, please try again")
 
 
 def copernicusmarine_reset(update_package=False, remove_folder=False, overwrite_cache=True):
