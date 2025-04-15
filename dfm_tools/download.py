@@ -366,6 +366,46 @@ def copernicusmarine_get_product(date_min, date_max, vartype):
     print(f"The CMEMS '{product}' product will be used.")
     return product
 
+def copernicusmarine_get_MED_product(date_min, date_max, vartype):
+    assert vartype in ['phy','bio']
+    
+    # the time extents between phy and bio can be different so we have to retrieve them both
+    
+    # time extents as global variables, so they only has to be retreived once per download run (otherwise once per variable)
+    global MED_phy_reanalysis_tstart, MED_phy_reanalysis_tstop
+    global MED_phy_forecast_tstart, MED_phy_forecast_tstop
+    global MED_bio_reanalysis_tstart, MED_bio_reanalysis_tstop
+    global MED_bio_forecast_tstart, MED_bio_forecast_tstop
+    
+    # retrieve times
+    if vartype=='phy' and 'MED_phy_reanalysis_tstart' not in globals():
+        print('retrieving time range of CMEMS reanalysis and forecast products (phy)') #assuming here that physchem and bio reanalyisus/multiyear datasets have the same enddate, this seems safe
+        MED_phy_reanalysis_tstart, MED_phy_reanalysis_tstop = copernicusmarine_dataset_timerange(dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m")
+        MED_phy_forecast_tstart, MED_phy_forecast_tstop = copernicusmarine_dataset_timerange(dataset_id="cmems_mod_glo_phy_anfc_0.083deg_P1D-m")
+    if vartype=='bio' and 'bio_reanalysis_tstart' not in globals():
+        print('retrieving time range of CMEMS reanalysis, reanalysis-interim and forecast products (bio)') #assuming here that physchem and bio reanalyisus/multiyear datasets have the same enddate, this seems safe
+        MED_bio_reanalysis_tstart, MED_bio_reanalysis_tstop = copernicusmarine_dataset_timerange(dataset_id="cmems_mod_glo_bgc_my_0.25deg_P1D-m")
+        MED_bio_forecast_tstart, MED_bio_forecast_tstop = copernicusmarine_dataset_timerange(dataset_id="cmems_mod_glo_bgc-pft_anfc_0.25deg_P1D-m")
+    
+    # set current start/stop times dependent on whether we request phy/bio
+    if vartype=='phy':
+        reanalysis_tstart, reanalysis_tstop = MED_phy_reanalysis_tstart, MED_phy_reanalysis_tstop
+        forecast_tstart, forecast_tstop = MED_phy_forecast_tstart, MED_phy_forecast_tstop
+    if vartype=='bio' :
+        reanalysis_tstart, reanalysis_tstop = MED_bio_reanalysis_tstart, MED_bio_reanalysis_tstop
+        forecast_tstart, forecast_tstop = MED_bio_forecast_tstart, MED_bio_forecast_tstop
+        
+    if (date_min >= reanalysis_tstart) & (date_max <= reanalysis_tstop):
+        product = 'MED-reanalysis'
+    elif (date_min >= forecast_tstart) & (date_max <= forecast_tstop):
+        product = 'MED-analysisforecast'
+    else:
+        raise ValueError(f'The requested timerange ({date_min} to {date_max}) is not fully within the timerange of one of the following datasets:\n'
+                         f'- reanalysis: {reanalysis_tstart} to {reanalysis_tstop}\n'
+                         f'- analysisforecast: {forecast_tstart} to {forecast_tstop}\n'
+                         'Please adjust the requested timerange and try again.')
+    print(f"The CMEMS '{product}' product will be used.")
+    return product
 
 def copernicusmarine_get_dataset_id(varkey, date_min, date_max):
     #TODO: maybe get dataset_id from 'copernicusmarine describe --include-datasets --contains <search_token>'
@@ -425,7 +465,7 @@ def copernicusmarine_get_MED_dataset_id(varkey, date_min, date_max):
     else:
         raise KeyError(f"unknown varkey for cmems: {varkey}")
     
-    product = copernicusmarine_get_product(date_min, date_max, vartype)
+    product = copernicusmarine_get_MED_product(date_min, date_max, vartype)
     
     if vartype == 'phy': #for physchem
         # resolution is 1/24 degrees in lat/lon dimension, but a bit more/less in alternating cells
