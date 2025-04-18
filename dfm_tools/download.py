@@ -405,6 +405,8 @@ def copernicusmarine_get_MED_product(date_min, date_max, vartype):
                          f'- analysisforecast: {forecast_tstart} to {forecast_tstop}\n'
                          'Please adjust the requested timerange and try again.')
     print(f"The CMEMS '{product}' product will be used.")
+    print(f'- reanalysis: {reanalysis_tstart} to {reanalysis_tstop}\n'
+          f'- analysisforecast: {forecast_tstart} to {forecast_tstop}')
     return product
 
 def copernicusmarine_get_dataset_id(varkey, date_min, date_max):
