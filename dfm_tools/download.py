@@ -253,7 +253,7 @@ def download_CMEMS(varkey,
 
 def download_MED_CMEMS(varkey,
                    longitude_min, longitude_max, latitude_min, latitude_max, 
-                   date_min, date_max, freq,
+                   date_min, date_max, freq='D',
                    dataset_id=None, buffer=None,
                    dir_output='.', file_prefix='', overwrite=False):
     """
