@@ -396,7 +396,7 @@ def copernicusmarine_get_MED_product(date_min, date_max, prod, vartype):
         reanalysis_tstart, reanalysis_tstop = MED_bio_reanalysis_tstart, MED_bio_reanalysis_tstop
         forecast_tstart, forecast_tstop = MED_bio_forecast_tstart, MED_bio_forecast_tstop
         
-    if (date_min >= reanalysis_tstart) & (date_max <= reanalysis_tstop) & (prod = 'R'):
+    if (date_min >= reanalysis_tstart) & (date_max <= reanalysis_tstop) & (prod == 'R'):
         product = 'MED-reanalysis'
     elif (date_min >= forecast_tstart) & (date_max <= forecast_tstop) & (prod=='F'):
         product = 'MED-analysisforecast'
