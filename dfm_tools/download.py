@@ -515,6 +515,7 @@ def copernicusmarine_get_MED_dataset_id(varkey, date_min, date_max, prod):
                 dataset_id = 'med-ogs-pft-rean-d'    
     else:
         raise ValueError(f"unknown vartype for cmems: {vartype}")
+    print(f'- dataset_id: {dataset_id}')
     return dataset_id
 
 
