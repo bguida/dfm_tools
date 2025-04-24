@@ -480,7 +480,7 @@ def copernicusmarine_get_MED_dataset_id(varkey, date_min, date_max, prod):
             elif varkey in ['thetao']:
                 dataset_id = 'cmems_mod_med_phy-tem_anfc_4.2km-3D_PT1H-m'
             else:
-                dataset_id = 'cmems_mod_med_phy-cur_anfc_4.2km-3D_PT1H-m'
+                dataset_id = 'cmems_mod_med_phy-ssh_anfc_4.2km-2D_PT1H-m'
         else: # reanalysis: https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_PHY_001_030/description
             if varkey in ['uo','vo']: # anfc datset is splitted over multiple urls
                 dataset_id = 'med-cmcc-cur-rean-d'
@@ -488,6 +488,8 @@ def copernicusmarine_get_MED_dataset_id(varkey, date_min, date_max, prod):
                 dataset_id = 'med-cmcc-sal-rean-d'
             elif varkey in ['thetao']:
                 dataset_id = 'med-cmcc-tem-rean-d'
+            else:
+                dataset_id = 'med-cmcc-ssh-rean-d'
     elif vartype == 'bio': # for bio
         # resolution is 1/24 degrees
         if product == 'MED-analysisforecast': # forecast: https://data.marine.copernicus.eu/product/GLOBAL_ANALYSISFORECAST_BGC_001_028/description
