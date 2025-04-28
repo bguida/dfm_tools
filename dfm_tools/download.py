@@ -252,7 +252,8 @@ def download_CMEMS(varkey,
             dataset_perperiod.to_netcdf(output_filename)
 
 def download_MED_CMEMS(varkey,
-                   longitude_min, longitude_max, latitude_min, latitude_max, 
+                   longitude_min, longitude_max, latitude_min, latitude_max,
+                   depth_max,
                    date_min, date_max, 
                    prod, freq='D',
                    dataset_id=None, buffer=None,
@@ -289,6 +290,7 @@ def download_MED_CMEMS(varkey,
          maximum_longitude = longitude_max,
          minimum_latitude = latitude_min,
          maximum_latitude = latitude_max,
+         maximum_depth=depth_max,
          start_datetime = date_min,
          end_datetime = date_max,
     )
