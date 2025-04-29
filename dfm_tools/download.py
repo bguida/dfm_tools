@@ -319,7 +319,7 @@ def download_MED_CMEMS(varkey,
                 print(f'"{name_output}" found and overwrite=False, continuing.')
                 continue
             dataset_perperiod = dataset.sel(time=slice(date_str, date_str))
-            if not dataset_perperiod.time == 0:
+            if dataset_perperiod.time != 0:
                 print(f'xarray writing netcdf file: {name_output}')
                 dataset_perperiod.to_netcdf(output_filename)
 
