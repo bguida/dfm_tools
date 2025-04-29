@@ -269,7 +269,7 @@ def download_MED_CMEMS(varkey,
     # We floor/ceil the input timestamps to make sure we
     # subset enough data in case of data with daily timesteps.
     date_min = pd.Timestamp(date_min).floor('1d')
-    date_max = pd.Timestamp(date_max).ceil('1d')
+    date_max = pd.Timestamp(date_max).ceil('1d') + pd.DateOffset(hours=1)
 
     if dataset_id is None:
         dataset_id = copernicusmarine_get_MED_dataset_id(varkey, date_min, date_max, prod)
