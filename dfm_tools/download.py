@@ -255,11 +255,13 @@ def download_MED_CMEMS(varkey,
                    longitude_min, longitude_max, latitude_min, latitude_max,
                    depth_max,
                    date_min, date_max, 
-                   prod, freq='D',
+                   prod, freq=None,
                    dataset_id=None, buffer=None,
                    dir_output='.', file_prefix='', overwrite=False):
     """
     https://help.marine.copernicus.eu/en/articles/8283072-copernicus-marine-toolbox-api-subset
+    
+    prod: forecast (=F) or reanalysis (=R)
     """
     copernicusmarine_remove_manual_credentials_file()
     copernicusmarine_credentials()
