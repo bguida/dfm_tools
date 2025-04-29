@@ -319,8 +319,9 @@ def download_MED_CMEMS(varkey,
                 print(f'"{name_output}" found and overwrite=False, continuing.')
                 continue
             dataset_perperiod = dataset.sel(time=slice(date_str, date_str))
-            print(f'xarray writing netcdf file: {name_output}')
-            dataset_perperiod.to_netcdf(output_filename)
+            if not dataset_perperiod.empty:
+                print(f'xarray writing netcdf file: {name_output}')
+                dataset_perperiod.to_netcdf(output_filename)
 
 def copernicusmarine_get_product(date_min, date_max, vartype):
     assert vartype in ['phy','bio']
