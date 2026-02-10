@@ -26,9 +26,6 @@ __all__ = [
     "download_OPeNDAP",
 ]
 
-=======
-]
-
 logger = logging.getLogger(__name__)
 
 COPERNICUSMARINE_OPTIMIZE_ARGS = dict(
