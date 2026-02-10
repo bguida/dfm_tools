@@ -413,11 +413,11 @@ def copernicusmarine_get_MED_product(date_min, date_max, prod, vartype):
     # retrieve times
     if vartype=='phy' and 'MED_phy_reanalysis_tstart' not in globals():
         print('retrieving time range of CMEMS reanalysis and forecast products (phy)') #assuming here that physchem and bio reanalyisus/multiyear datasets have the same enddate, this seems safe
-        MED_phy_reanalysis_tstart, MED_phy_reanalysis_tstop = copernicusmarine_dataset_timerange(dataset_id="med-cmcc-cur-rean-d")
+        MED_phy_reanalysis_tstart, MED_phy_reanalysis_tstop = copernicusmarine_dataset_timerange(dataset_id="cmems_mod_med_phy-cur_my_4.2km_P1D-m")
         MED_phy_forecast_tstart, MED_phy_forecast_tstop = copernicusmarine_dataset_timerange(dataset_id="cmems_mod_med_phy-cur_anfc_4.2km_P1D-m")
     if vartype=='bio' and 'bio_reanalysis_tstart' not in globals():
         print('retrieving time range of CMEMS reanalysis and forecast products (bio)') #assuming here that physchem and bio reanalyisus/multiyear datasets have the same enddate, this seems safe
-        MED_bio_reanalysis_tstart, MED_bio_reanalysis_tstop = copernicusmarine_dataset_timerange(dataset_id="med-ogs-bio-rean-d")
+        MED_bio_reanalysis_tstart, MED_bio_reanalysis_tstop = copernicusmarine_dataset_timerange(dataset_id="cmems_mod_med_bgc-bio_anfc_4.2km_P1D-m")
         MED_bio_forecast_tstart, MED_bio_forecast_tstop = copernicusmarine_dataset_timerange(dataset_id="cmems_mod_med_bgc-bio_anfc_4.2km_P1D-m")
     
     # set current start/stop times dependent on whether we request phy/bio
@@ -511,13 +511,13 @@ def copernicusmarine_get_MED_dataset_id(varkey, date_min, date_max, prod):
                 dataset_id = 'cmems_mod_med_phy-ssh_anfc_4.2km_P1D-m'
         else: # reanalysis: https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_PHY_001_030/description
             if varkey in ['uo','vo']: # anfc datset is splitted over multiple urls
-                dataset_id = 'med-cmcc-cur-rean-d'
+                dataset_id = 'cmems_mod_med_phy-cur_my_4.2km_P1D-m'
             elif varkey in ['so']:
-                dataset_id = 'med-cmcc-sal-rean-d'
+                dataset_id = 'cmems_mod_med_phy-sal_my_4.2km_P1D-m'
             elif varkey in ['thetao']:
-                dataset_id = 'med-cmcc-tem-rean-d'
+                dataset_id = 'cmems_mod_med_phy-temp_my_4.2km_P1D-m'
             else:
-                dataset_id = 'med-cmcc-ssh-rean-d'
+                dataset_id = 'cmems_mod_med_phy-ssh_my_4.2km_P1D-m'
     elif vartype == 'bio': # for bio
         # resolution is 1/24 degrees
         if product == 'MED-analysisforecast': # forecast: https://data.marine.copernicus.eu/product/GLOBAL_ANALYSISFORECAST_BGC_001_028/description
@@ -534,15 +534,15 @@ def copernicusmarine_get_MED_dataset_id(varkey, date_min, date_max, prod):
         else: # reanalysis: https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_BGC_001_029/description
             #dataset_id = 'cmems_mod_glo_bgc_my_0.25deg_P1D-m'
             if varkey in ['nppv','o2']:
-                dataset_id = 'med-ogs-bio-rean-d'
+                dataset_id = 'cmems_mod_med_bgc-bio_my_4.2km_P1D-m'
             elif varkey in ['talk','dissic','ph']:
-                dataset_id = 'med-ogs-car-rean-d'
+                dataset_id = 'cmems_mod_med_bgc-car_my_4.2km_P1D-m'
             elif varkey in ['spco2']:
-                dataset_id = 'med-ogs-co2-rean-d'
+                dataset_id = 'cmems_mod_med_bgc-co2_my_4.2km_P1D-m'
             elif varkey in ['no3','po4','si','fe']:
-                dataset_id = 'med-ogs-nut-rean-d'
+                dataset_id = 'cmems_mod_med_bgc-nut_my_4.2km_P1D-m '
             elif varkey in ['chl','phyc']:
-                dataset_id = 'med-ogs-pft-rean-d'    
+                dataset_id = 'cmems_mod_med_bgc-plankton_my_4.2km_P1D-m '    
     else:
         raise ValueError(f"unknown vartype for cmems: {vartype}")
     print(f'- dataset_id: {dataset_id}')
