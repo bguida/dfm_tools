@@ -4,9 +4,9 @@ import pandas as pd
 import dfm_tools as dfmt
 import datetime as dt
 import xarray as xr
+import platform
 import hydrolib.core.dflowfm as hcdfm
 from hydrolib.core.dimr.models import DIMR, FMComponent, Start
-from hydrolib.core.utils import get_path_style_for_current_operating_system
 from dfm_tools.interpolate_grid2bnd import (ext_add_boundary_object_per_polyline,
                                             open_prepare_dataset,
                                             ds_apply_conversion_dict,
@@ -18,7 +18,6 @@ __all__ = [
     "constant_to_bc",
     "cmems_nc_to_bc",
     "cmems_nc_to_ini",
-    "preprocess_ini_cmems_to_nc",
     "preprocess_merge_meteofiles_era5",
     "create_model_exec_files",
     "make_paths_relative",
@@ -104,6 +103,7 @@ def cmems_nc_to_bc(ext_new, list_quantities, tstart, tstop, file_pli, dir_patter
                                                   tstart=tstart, tstop=tstop,
                                                   conversion_dict=conversion_dict,
                                                   refdate_str=refdate_str)
+            
             if quantity_key == quantity_list[0]:
                 data_xr_vars = data_xr_onevar
             else: # only relevant in case of ux/uy, others all have only one quantity
@@ -113,6 +113,8 @@ def cmems_nc_to_bc(ext_new, list_quantities, tstart, tstop, file_pli, dir_patter
         polyfile_obj = hcdfm.PolyFile(file_pli)
         gdf_points = dfmt.PolyFile_to_geodataframe_points(polyfile_object=polyfile_obj)
         data_interp = dfmt.interp_regularnc_to_plipointsDataset(data_xr_reg=data_xr_vars, gdf_points=gdf_points, load=True)
+        # round to 6 decimal digits to save diskspace
+        data_interp = data_interp.round(6)
         
         #convert plipointsDataset to hydrolib ForcingModel
         ForcingModel_object = dfmt.plipointsDataset_to_ForcingModel(plipointsDataset=data_interp)
@@ -132,11 +134,6 @@ def cmems_nc_to_bc(ext_new, list_quantities, tstart, tstop, file_pli, dir_patter
     return ext_new
 
 
-def preprocess_ini_cmems_to_nc(**kwargs):
-    raise DeprecationWarning("`dfmt.preprocess_ini_cmems_to_nc()` was "
-                             "deprecated, use `cmems_nc_to_ini()` instead")
-
-
 def cmems_nc_to_ini(
         ext_old,
         dir_output,
@@ -152,6 +149,15 @@ def cmems_nc_to_ini(
     dimensions are ordered differently, there will be an error or incorrect
     model results.
     """
+    
+    def format_path(path, ncvarname):
+        if isinstance(dir_pattern, list):
+            path = [x.format(ncvarname=ncvarname) for x in path]
+        else:
+            path = path.format(ncvarname=ncvarname)
+        return path
+            
+    xr_kwargs = {"join":"exact", "data_vars":"minimal"}
     
     if conversion_dict is None:
         conversion_dict = dfmt.get_conversion_dict()
@@ -176,25 +182,25 @@ def cmems_nc_to_ini(
             quantity=quan_bnd,
             conversion_dict=conversion_dict,
             )
-        dir_pattern_one = dir_pattern.format(ncvarname=ncvarname)
+        dir_pattern_one = format_path(dir_pattern, ncvarname=ncvarname)
         
         if quan_bnd=="salinitybnd":
             # this also handles temperaturebnd
             # 3D initialsalinity/initialtemperature fields are silently ignored
             # initial 3D conditions are only possible via nudging 1st timestep
             # via quantity=nudge_salinity_temperature
-            data_xr = xr.open_mfdataset(dir_pattern_one)
+            data_xr = xr.open_mfdataset(dir_pattern_one, **xr_kwargs)
             ncvarname_tem = get_ncvarname(
                 quantity="temperaturebnd",
                 conversion_dict=conversion_dict,
                 )
-            dir_pattern_tem = dir_pattern.format(ncvarname=ncvarname_tem)
-            data_xr_tem = xr.open_mfdataset(dir_pattern_tem)
+            dir_pattern_tem = format_path(dir_pattern, ncvarname=ncvarname_tem)
+            data_xr_tem = xr.open_mfdataset(dir_pattern_tem, **xr_kwargs)
             data_xr["thetao"] = data_xr_tem["thetao"]
             quantity = "nudge_salinity_temperature"
             varname = None
         elif quan_bnd.startswith("tracer"):
-            data_xr = xr.open_mfdataset(dir_pattern_one)
+            data_xr = xr.open_mfdataset(dir_pattern_one, **xr_kwargs)
             data_xr = ds_apply_conversion_dict(
                 data_xr=data_xr,
                 conversion_dict=conversion_dict,
@@ -215,11 +221,11 @@ def cmems_nc_to_ini(
         # delft3dfm will crash if there is only one timestep
         assert len(data_xr.time) >= 2
     
-        # interpolate_na for all data_vars, first over lat/lon, then over depth
+        # extrapolate data for all data_vars, first over depth, then over lat/lon
         for var in data_xr.data_vars:
+            data_xr[var] = interpolate_na_multidim(data_xr[var], ["depth"])
             data_xr[var] = interpolate_na_multidim(data_xr[var], ["latitude", 
                                                                   "longitude"])
-            data_xr[var] = interpolate_na_multidim(data_xr[var], ["depth"])
         
         print('writing file')
         file_output = os.path.join(dir_output,f"{quantity}_{tstart_str}.nc")
@@ -239,96 +245,104 @@ def cmems_nc_to_ini(
     return ext_old
 
 
-def preprocess_merge_meteofiles_era5(ext_old, varkey_list, dir_data, dir_output, time_slice):
-
-    if isinstance(varkey_list[0], list):
-        varkey_lists = varkey_list
-    else:
-        varkey_lists = [varkey_list]
+def preprocess_merge_meteofiles_era5(
+        ext_old,
+        varkey_list,
+        dir_data,
+        dir_output,
+        time_slice,
+        ):
+    """
+    Merge ERA5 data per variable for the requested time period.
+    """
+    if not os.path.exists(dir_output):
+        os.makedirs(dir_output)
     
-    for varkey_list in varkey_lists:
-        fn_match_pattern = f'era5_.*({"|".join(varkey_list)})_.*.nc' #simpler but selects more files: 'era5_*.nc'
-        file_out_prefix = f'era5_{"_".join(varkey_list)}_'
-        preprocess = dfmt.preprocess_ERA5 #reduce expver dimension if present
+    # TODO: align with variables_dict from dfmt.download_ERA5()
+    dict_varkey_quantities = {
+        'ssr':'solarradiation',
+        # 'sst':'sea_surface_temperature',
+        'strd':'longwaveradiation',
+        # 'slhf':'surface_latent_heat_flux',
+        # 'sshf':'surface_sensible_heat_flux',
+        # 'str':'surface_net_thermal_radiation',
+        'chnk':'charnock',
+        'd2m':'dewpoint',
+        't2m':'airtemperature',
+        'tcc':'cloudiness',
+        'msl':'airpressure',
+        'u10':'windx',
+        'u10n':'windx',
+        'v10':'windy',
+        'v10n':'windy',
+        'mer':'rainfall_rate', 
+        'mtpr':'rainfall_rate',
+        'rhoao':'airdensity',
+        }
+    
+    for varkey in varkey_list:
+        if isinstance(varkey, list):
+            raise TypeError(
+                "varkey_list should not contain lists, support was dropped in favour "
+                "of supporting separate quantities. Provide a list of strings instead."
+                )
         
-        if not os.path.exists(dir_output):
-            os.makedirs(dir_output)
+        if varkey not in dict_varkey_quantities.keys():
+            raise NotImplementedError(
+                f"The varkey '{varkey}' is not supported yet by "
+                "dfmt.preprocess_merge_meteofiles_era5(), please create a dfm_tools "
+                "issue if you need this."
+                )
         
-        file_nc = os.path.join(dir_data,fn_match_pattern)
+        fn_match_pattern = f'era5_{varkey}_*.nc'
+        file_nc = os.path.join(dir_data, fn_match_pattern)
         
-        data_xr_tsel = dfmt.merge_meteofiles(file_nc=file_nc,
-                                             time_slice=time_slice, 
-                                             preprocess=preprocess,
-                                             )
+        ds = dfmt.merge_meteofiles(
+            file_nc=file_nc,
+            time_slice=time_slice, 
+            preprocess=dfmt.preprocess_ERA5,
+            )
         
-        #write to netcdf file
+        # check if the variable is present in merged netcdf. This could go wrong for
+        # avg_tprate and avg_ie that are renamed to mtpr and mer in preprocess_ERA5
+        if varkey not in ds:
+            raise KeyError(
+                f"Requested variable ({varkey}) is not present in the "
+                f"merged dataset ({list(ds.data_vars)})."
+                )
+        
+        # write to netcdf file
         print('>> writing file (can take a while): ',end='')
         dtstart = dt.datetime.now()
-        times_pd = data_xr_tsel['time'].to_series()
+        times_pd = ds['time'].to_series()
         time_start_str = times_pd.iloc[0].strftime("%Y%m%d")
         time_stop_str = times_pd.iloc[-1].strftime("%Y%m%d")
-        file_out = os.path.join(dir_output, f'{file_out_prefix}{time_start_str}to{time_stop_str}_ERA5.nc')
-        data_xr_tsel.to_netcdf(file_out)
+        file_out = os.path.join(
+            dir_output, f'era5_{varkey}_{time_start_str}to{time_stop_str}_ERA5.nc'
+            )
+        ds.to_netcdf(file_out)
         print(f'{(dt.datetime.now()-dtstart).total_seconds():.2f} sec')
+           
+        quantity = dict_varkey_quantities[varkey]
         
-        #append to ext model
-        if varkey_list == ['msl','u10n','v10n','chnk']:
-            forcing_meteo = hcdfm.ExtOldForcing(quantity='airpressure_windx_windy_charnock',
-                                                filename=file_out,
-                                                varname='msl u10n v10n chnk',
-                                                filetype=hcdfm.ExtOldFileType.NetCDFGridData, #11
-                                                method=hcdfm.ExtOldMethod.InterpolateTimeAndSpaceSaveWeights, #3
-                                                operand=hcdfm.Operand.override, #O
-                                                )
-            ext_old.forcing.append(forcing_meteo)
-        elif varkey_list == ['d2m','t2m','tcc']:
-            forcing_meteo = hcdfm.ExtOldForcing(quantity='dewpoint_airtemperature_cloudiness',
-                                                filename=file_out,
-                                                varname='d2m t2m tcc',
-                                                filetype=hcdfm.ExtOldFileType.NetCDFGridData, #11
-                                                method=hcdfm.ExtOldMethod.InterpolateTimeAndSpaceSaveWeights, #3
-                                                operand=hcdfm.Operand.override, #O
-                                                )
-            ext_old.forcing.append(forcing_meteo)
-        elif varkey_list == ['ssr','strd']:
-            forcing_meteo = hcdfm.ExtOldForcing(quantity='solarradiation',
-                                                filename=file_out,
-                                                varname='ssr',
-                                                filetype=hcdfm.ExtOldFileType.NetCDFGridData, #11
-                                                method=hcdfm.ExtOldMethod.InterpolateTimeAndSpaceSaveWeights, #3
-                                                operand=hcdfm.Operand.override, #O
-                                                )
-            ext_old.forcing.append(forcing_meteo)
-            forcing_meteo = hcdfm.ExtOldForcing(quantity='longwaveradiation',
-                                                filename=file_out,
-                                                varname='strd',
-                                                filetype=hcdfm.ExtOldFileType.NetCDFGridData, #11
-                                                method=hcdfm.ExtOldMethod.InterpolateTimeAndSpaceSaveWeights, #3
-                                                operand=hcdfm.Operand.override, #O
-                                                )
-            ext_old.forcing.append(forcing_meteo)
-        elif varkey_list == ['mer','mtpr']:
-            forcing_meteo = hcdfm.ExtOldForcing(quantity='rainfall_rate',
-                                                filename=file_out,
-                                                varname='mtpr',
-                                                filetype=hcdfm.ExtOldFileType.NetCDFGridData, #11
-                                                method=hcdfm.ExtOldMethod.InterpolateTimeAndSpaceSaveWeights, #3
-                                                operand=hcdfm.Operand.override, #O
-                                                )
-            ext_old.forcing.append(forcing_meteo)
-            forcing_meteo = hcdfm.ExtOldForcing(quantity='rainfall_rate',
-                                                filename=file_out,
-                                                varname='mer',
-                                                filetype=hcdfm.ExtOldFileType.NetCDFGridData, #11
-                                                method=hcdfm.ExtOldMethod.InterpolateTimeAndSpaceSaveWeights, #3
-                                                operand=hcdfm.Operand.add, #+
-                                                )
-            ext_old.forcing.append(forcing_meteo)
-        else:
-            # TODO: add support for other quantities: https://github.com/Deltares/dfm_tools/issues/887
-            raise KeyError(f"'{varkey_list}' is not supported by dfmt.preprocess_merge_meteofiles_era5(), "
-                           "the files were merged but the ExtModel Forcing cannot be appended.")
+        current_ext_quantities = [x.quantity for x in ext_old.forcing]
+        operand = hcdfm.Operand.override # O
+        if quantity in current_ext_quantities:
+            logger.info(
+                f"quantity {quantity} already found in ext file, using operand=+"
+                )
+            operand = hcdfm.Operand.add # +
         
+        forcing_meteo = hcdfm.ExtOldForcing(
+            quantity=quantity,
+            filename=file_out,
+            varname=varkey,
+            filetype=hcdfm.ExtOldFileType.NetCDFGridData, #11
+            method=hcdfm.ExtOldMethod.InterpolateTimeAndSpaceSaveWeights, #3
+            operand=operand,
+            )
+        ext_old.forcing.append(forcing_meteo)
+
     return ext_old
 
 
@@ -364,7 +378,8 @@ def create_model_exec_files(file_mdu, nproc=1, dimrset_folder=None, path_style=N
     
     # continue with dimrset_folder which is not None or 'docker'
     if path_style is None:
-        path_style = get_path_style_for_current_operating_system().value
+        # set the system name as the path_style (lowercase)
+        path_style = platform.system().lower()
     
     if path_style == 'windows':
         generate_bat_file(dimr_model=dimr_model, dimrset_folder=dimrset_folder)
@@ -412,14 +427,14 @@ pause
 
 def generate_docker_file(dimr_model):
     """
-    generate run_docker.sh file for running on windows or unix with docker
+    generate run_model.sh file for running on windows or unix with docker
     """
     
     if dimr_model.filepath is None:
         raise Exception('first save the dimr_model before passing it to generate_bat_file')
     
     dirname = os.path.dirname(dimr_model.filepath)
-    file_docker = os.path.join(dirname, "run_docker.sh")
+    file_docker = os.path.join(dirname, "run_model.sh")
     docker_name = os.path.basename(file_docker)
     
     dimr_name = os.path.basename(dimr_model.filepath)
@@ -427,14 +442,16 @@ def generate_docker_file(dimr_model):
     nproc = dimr_model.component[0].process
     
     docker_str = fr"""#!/bin/bash
-# export OMP_NUM_THREADS=1 # not sure what for
-export I_MPI_FABRICS=shm # required on windows
+# To start DIMR, execute this script
 
-# first pull or load a docker container
-# docker pull deltares/delft3dfm
-# docker load -i <file.tar>
-# RUN THIS run_docker.sh FILE ON COMMAND LINE WITH (shm-size and ulimit seem optional):
-# docker run -v /path/to/dimr:/data -t deltares/delft3dfm:latest /data/run_docker.sh --shm-size=4gb --ulimit stack=-1
+# HOW TO RUN A MODEL WITH DOCKER (from delft3dfm 2025.02)
+# Create a MyDeltares account at containers.deltares.nl
+# Request access to the Delft3D Docker repository on Harbor via black-ops@deltares.nl
+# Get your CLI secret from your account settings at containers.deltares.nl
+# `docker login containers.deltares.nl` with your MyDeltares email address and CLI secret as credentials
+# `docker pull containers.deltares.nl/delft3d/delft3dfm:release-2025.02`
+# Run this run_model.sh script with docker via:
+# docker run -v "[absolute_path_to_model_folder]:/data" --shm-size 4G -it containers.deltares.nl/delft3d/delft3dfm:release-2025.02 /data/run_model.sh
 
 # stop after an error occured
 set -e
@@ -442,11 +459,11 @@ set -e
 # set number of partitions
 nPart={nproc}
 
-# location of the binaries inside Docker image
-delft3d=/opt/delft3dfm_latest/lnx64
-
 # DIMR input-file; must already exist!
 dimrFile={dimr_name}
+
+# Folder with the MDU file, relative to the location of this script
+mduFolder=.
 
 # Replace number of processes in DIMR file
 PROCESSSTR="$(seq -s " " 0 $((nPart-1)))"
@@ -457,14 +474,16 @@ sed -i "s/\(<process.*>\)[^<>]*\(<\/process.*\)/\1$PROCESSSTR\2/" $dimrFile
 mduFile={mdu_name}
 
 if [ "$nPart" == "1" ]; then
-    $delft3d/bin/run_dimr.sh -m $dimrFile
+    run_dimr.sh -m $dimrFile
 else
-    $delft3d/bin/run_dflowfm.sh --partition:ndomains=$nPart:icgsolver=6 $mduFile
-    $delft3d/bin/run_dimr.sh -c $nPart -m $dimrFile
+    pushd $mduFolder
+        run_dflowfm.sh --partition:ndomains=$nPart:icgsolver=6 $mduFile
+    popd
+    run_dimr.sh -c $nPart -m $dimrFile
 fi
 """
     print(f"writing {docker_name}")
-    # run_docker.sh requires unix file endings, so we use newline='\n'
+    # run_model.sh requires unix file endings, so we use newline='\n'
     with open(file_docker, 'w', newline='\n') as f:
         f.write(docker_str)
 

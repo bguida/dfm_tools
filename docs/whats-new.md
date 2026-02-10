@@ -2,11 +2,88 @@
 
 ## UNRELEASED
 
+
+## 0.44.0 (2025-12-22)
+
+# Feat
+- update to new RWS Waterwebservices (and ddlpy) in [#1301](https://github.com/Deltares/dfm_tools/pull/1301)
+
+
+## 0.43.0 (2025-11-27)
+
+### Fix
+- robustly retrieving bbox in `dfmt.meshkernel_get_bbox()` in [#1292](https://github.com/Deltares/dfm_tools/pull/1292)
+- simpler parsing of uhslc geojson after pyogrio update in [#1294](https://github.com/Deltares/dfm_tools/pull/1294)
+- update for `dfmt.meshkernel_get_illegalcells()` to align with new meshkernel version in [#909](https://github.com/Deltares/dfm_tools/issues/909)
+- only include illegalcells up to 6 edges in `dfmt.meshkernel_get_illegalcells()` in [#1296](https://github.com/Deltares/dfm_tools/pull/1296)
+
+
+## 0.42.0 (2025-11-03)
+
+### Fix
+- removed references to soon to be discontinued CMEMS multiyear-interim datasets in [#1279](https://github.com/Deltares/dfm_tools/pull/1279)
+- allow for polyline names starting with numeric characters in [#1281](https://github.com/Deltares/dfm_tools/pull/1281)
+- avoid writing of mdu keywords that are obsolete in Delft3D FM 2026.01 in [#1283](https://github.com/Deltares/dfm_tools/issues/1283)
+
+### Deprecated
+- removed poorly written and hycom-specific `dfmt.download_OPeNDAP()` in [#1289](https://github.com/Deltares/dfm_tools/pull/1289)
+
+
+## 0.40.0 (2025-10-08)
+
+### Feat
+- support for list of files in `dfmt.cmems_nc_to_ini()` for better performance in [#1258](https://github.com/Deltares/dfm_tools/pull/1258)
+- added polygon argument to `dfmt.refine_basegrid()` in [#1262](https://github.com/Deltares/dfm_tools/pull/1262)
+- performance improvement for `dfmt.get_Dataset_atdepths()` in [#1264](https://github.com/Deltares/dfm_tools/pull/1264)
+- support for multiple 2D quantities in `dfmt.Dataset_to_TimeSeries()` and therefore in `dfmt.plipointsDataset_to_ForcingModel()` in [#1268](https://github.com/Deltares/dfm_tools/pull/1268)
+
+
+## 0.39.0 (2025-08-21)
+
+### Feat
+- extrapolate depth first in `dfmt.cmems_nc_to_ini()` in [#1231](https://github.com/Deltares/dfm_tools/pull/1231)
+- avoid longpaths error in VSCode by removing direct fiona import in [#1239](https://github.com/Deltares/dfm_tools/pull/1239)
+- make all paths in dfm_tools settable in [#1235](https://github.com/Deltares/dfm_tools/pull/1235)
+- reduce filesize of bc files by rounding data to six decimal places in [#1240](https://github.com/Deltares/dfm_tools/pull/1240)
+
+
+## 0.38.0 (2025-06-26)
+
+### Fix
+- made SSC linked stations in `ssc_add_linked_stations()` case-insensitive in [#6b3949f](https://github.com/Deltares/dfm_tools/commit/6b3949fdac152016b4c5f043f514ffd72c9f5e6e)
+- avoid usage of moved private hydrolib-core function in [#1210](https://github.com/Deltares/dfm_tools/pull/1210)
+- fixed z-sigma layer reconstruction for waterlevels below the z-sigma-interface in [#1219](https://github.com/Deltares/dfm_tools/pull/1219)
+- improved aspect ratio in `dfmt.generate_basegrid()` by updating meshkernel dependency in [#1223](https://github.com/Deltares/dfm_tools/pull/1223)
+
+### Feat
+- enable separate retrieval of UHSLC rqds/fast observationdata again in `dfmt.ssh_retrieve_data()` (via `uhslc_ssh_retrieve_data()`) in [#1205](https://github.com/Deltares/dfm_tools/pull/1205)
+- separate ERA5 quantities (supported from Delft3D-FM 2024.02) in [#1211](https://github.com/Deltares/dfm_tools/pull/1211)
+- updated docker run script to efficiently work with Delft3D-FM 2025.02 (and later) docker containers in [#1216](https://github.com/Deltares/dfm_tools/pull/1216)
+
+
+## 0.37.0 (2025-05-14)
+
+This release drops support for Python 3.9.
+
 ### Fix
 - retain encoding and long_name attribute also for variables converted with `convert_meteo_units()` in `dfmt.merge_meteofiles()` in [#1164](https://github.com/Deltares/dfm_tools/pull/1164)
+- updated GESLA3 datasource in [#1173](https://github.com/Deltares/dfm_tools/pull/1173)
+- stricter merging of datasets in `dfmt.cmems_nc_to_ini()` in [#1174](https://github.com/Deltares/dfm_tools/pull/1174)
+- support for copernicusmarine 2.1.0 in [#1180](https://github.com/Deltares/dfm_tools/pull/1180)
+- also construct sigmalayers when sigma-variables are coordinates [#1183](https://github.com/Deltares/dfm_tools/pull/1183)
+- improved performance of `dfmt.uda_to_faces()` by using xugrid alternative in [#1177](https://github.com/Deltares/dfm_tools/pull/1177)
+- check if all requested variables are present in merged dataset in `dfmt.preprocess_merge_meteofiles_era5()` in [#1184](https://github.com/Deltares/dfm_tools/pull/1184)
+- remove accents from UHSLC-fast insitu catalog so `S64` datatype can be applied in `_make_hydrotools_consistent()` in [#1186](https://github.com/Deltares/dfm_tools/pull/1186)
 
 ### Deprecated
 - removed `dfmt.preprocess_woa` since WOA merging fails and is not used in [#1161](https://github.com/Deltares/dfm_tools/pull/1161)
+- support for python 3.9 is dropped in [#1177](https://github.com/Deltares/dfm_tools/pull/1177)
+- deprecated sources "uhslc-fast" and "uhslc-rqds" in `dfmt.ssh_catalog_subset()` and `dfmt.ssh_retrieve_data()` in favor of "uhslc" in [#1193](https://github.com/Deltares/dfm_tools/pull/1193)
+
+### Feat
+- added cross-referencing SSC/IOC/UHSLC stations and distances in `ssc_ssh_read_catalog()` in [#1191](https://github.com/Deltares/dfm_tools/pull/1191)
+- set coords and reduce filesize of retrieved observations in `dfmt.ssh_retrieve_data()` in [#1189](https://github.com/Deltares/dfm_tools/pull/1189)
+- auto-merging of uhslc fast and rqds datasets in `dfmt.ssh_retrieve_data()` in [#1193](https://github.com/Deltares/dfm_tools/pull/1193)
 
 
 ## 0.36.0 (2025-03-18)

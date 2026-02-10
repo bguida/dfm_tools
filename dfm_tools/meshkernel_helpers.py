@@ -13,6 +13,7 @@ from shapely import MultiPolygon, LineString, MultiLineString
 from shapely.ops import linemerge
 from itertools import groupby
 from shapely import Polygon
+from meshkernel import GeometryList, MeshKernel
 
 __all__ = [
     "meshkernel_delete_withcoastlines",
@@ -27,6 +28,17 @@ __all__ = [
     "generate_bndpli_cutland_shp",
     "interpolate_bndpli",
     ]
+
+def meshkernel_get_bbox(mk:meshkernel.MeshKernel):
+    """
+    get the bbox of a meshkernel instance as (xmin, ymin, xmax, ymax)
+    """
+    mesh2d = mk.mesh2d_get()
+    xcoords = mesh2d.node_x
+    ycoords = mesh2d.node_y
+    bbox = (xcoords.min(), ycoords.min(), xcoords.max(), ycoords.max())
+    return bbox
+
 
 def meshkernel_delete_withcoastlines(mk:meshkernel.MeshKernel, res:str='f', min_area:float = 0, crs:(int,str) = None):
     """
@@ -49,10 +61,7 @@ def meshkernel_delete_withcoastlines(mk:meshkernel.MeshKernel, res:str='f', min_
 
     """
     
-    mesh_bnds = mk.mesh2d_get_mesh_boundaries_as_polygons()
-    
-    bbox = (mesh_bnds.x_coordinates.min(), mesh_bnds.y_coordinates.min(), mesh_bnds.x_coordinates.max(), mesh_bnds.y_coordinates.max())
-    
+    bbox = meshkernel_get_bbox(mk)
     coastlines_gdf = get_coastlines_gdb(bbox=bbox, res=res, min_area=min_area, crs=crs)
     
     meshkernel_delete_withgdf(mk, coastlines_gdf)
@@ -77,8 +86,7 @@ def meshkernel_delete_withshp(mk:meshkernel.MeshKernel, coastlines_shp:str, crs:
     
     """
         
-    mesh_bnds = mk.mesh2d_get_mesh_boundaries_as_polygons()
-    bbox = (mesh_bnds.x_coordinates.min(), mesh_bnds.y_coordinates.min(), mesh_bnds.x_coordinates.max(), mesh_bnds.y_coordinates.max())
+    bbox = meshkernel_get_bbox(mk)
     coastlines_gdb = gpd.read_file(coastlines_shp, bbox=bbox)
     
     if crs:
@@ -116,8 +124,13 @@ def meshkernel_delete_withgdf(mk:meshkernel.MeshKernel, coastlines_gdf:gpd.GeoDa
 
 
 def meshkernel_get_illegalcells(mk):
+    # first reset the mesh to get a blended inner boundary
+    # TODO: remove this after fixing https://github.com/Deltares/MeshKernelPy/issues/253
+    mk2 = MeshKernel(projection=mk.get_projection())
+    mk2.mesh2d_set(mk.mesh2d_get())
+    
     # get illegalcells from meshkernel instance
-    illegalcells_geom = mk.mesh2d_get_face_polygons(num_edges=6)
+    illegalcells_geom = mk2.mesh2d_get_mesh_inner_boundaries_as_polygons()
     # convert xy coords to numpy array
     illegalcells_np = np.c_[illegalcells_geom.x_coordinates, illegalcells_geom.y_coordinates]
     # split illegalcells array based on the geomtry_separator
@@ -125,6 +138,12 @@ def meshkernel_get_illegalcells(mk):
     # convert to geodataframe of Polygons
     list_polygons = [Polygon(xylist) for xylist in xy_lists]
     illegalcells_gdf = gpd.GeoDataFrame(geometry=list_polygons)
+    
+    # only include polygons around cells up to 6 edges/nodes (polygon of 7 points)
+    # larger "cells" are not considered as cells by the FM kernel and meshkernel
+    pol_npoints = illegalcells_gdf.count_coordinates()
+    bool_illegal = pol_npoints <= 7
+    illegalcells_gdf = illegalcells_gdf.loc[bool_illegal]
     return illegalcells_gdf
 
 
@@ -332,6 +351,7 @@ def make_basegrid(lon_min,lon_max,lat_min,lat_max,dx,dy,angle=0,
 def refine_basegrid(
         mk:meshkernel.MeshKernel,
         data_bathy_sel:xr.DataArray,
+        polygon: GeometryList = GeometryList(),
         **kwargs,
         ):
     """
@@ -344,6 +364,10 @@ def refine_basegrid(
     data_bathy_sel : xr.DataArray
         The bathymetry data used for the refinement. Is converted to 
         meshkernel.GriddedSamples().
+    polygon : GeometryList, optional
+        A polygon in the format of meshkernel.GeometryList. Grid refinement will only
+        happen within the specified polygon. The default is an empty GeometryList(),
+        resulting in refinement everywhere.
     **kwargs : TYPE
         Arguments passed on to meshkernel.MeshRefinementParameters(). Some
         options from the meshkernelpy docs:
@@ -389,6 +413,7 @@ def refine_basegrid(
         gridded_samples=gridded_samples,
         mesh_refinement_params=mesh_refinement_parameters,
         use_nodal_refinement=True,
+        polygon=polygon,
         )
 
 
@@ -403,15 +428,6 @@ def meshkernel_get_outer_xycoords(mk:meshkernel.MeshKernel):
     return xcoords, ycoords
 
     
-def meshkernel_get_bbox(mk:meshkernel.MeshKernel):
-    """
-    get the bbox of a meshkernel instance as (xmin, ymin, xmax, ymax)
-    """
-    xcoords, ycoords = meshkernel_get_outer_xycoords(mk)
-    bbox = (xcoords.min(), ycoords.min(), xcoords.max(), ycoords.max())
-    return bbox
-
-
 def generate_bndpli_cutland(mk:meshkernel.MeshKernel, res:str='f', min_area:float = 0, crs:(int,str) = None, buffer:float = 0):
     """
     Generate a boundary polyline from the meshkernel object and cut away the landward part.

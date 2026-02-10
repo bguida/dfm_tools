@@ -74,6 +74,20 @@ def test_uds_add_crs_attrs_spherical():
 
 
 @pytest.mark.unittest
+def test_meshkernel_make_basegrid():
+    # domain and resolution
+    lon_min, lon_max, lat_min, lat_max = -68.55, -67.9, 11.8, 12.6
+    dxy = 0.05
+    crs = 'EPSG:4326'
+
+    # basegrid
+    mk_object = dfmt.make_basegrid(lon_min, lon_max, lat_min, lat_max, dx=dxy, dy=dxy, crs=crs)
+    
+    assert len(mk_object.mesh2d_get().node_x) == 252
+    assert len(mk_object.mesh2d_get().face_nodes) == 884
+
+
+@pytest.mark.unittest
 def test_meshkernel_refine_basegrid():
     # domain and resolution
     lon_min, lon_max, lat_min, lat_max = -68.55, -67.9, 11.8, 12.6
@@ -92,19 +106,61 @@ def test_meshkernel_refine_basegrid():
         mk_object = dfmt.make_basegrid(lon_min, lon_max, lat_min, lat_max, dx=dxy, dy=dxy, crs=crs)
         mk_object_no_edge_size = dfmt.make_basegrid(lon_min, lon_max, lat_min, lat_max, dx=dxy, dy=dxy, crs=crs)
         mk_object_not_connect = dfmt.make_basegrid(lon_min, lon_max, lat_min, lat_max, dx=dxy, dy=dxy, crs=crs)
-    
+        
         # refine (fails if wrong type)
         min_edge_size = 300 #in meters
         dfmt.refine_basegrid(mk=mk_object, data_bathy_sel=data_bathy_sel, min_edge_size=min_edge_size)
         dfmt.refine_basegrid(mk=mk_object_no_edge_size, data_bathy_sel=data_bathy_sel)
         dfmt.refine_basegrid(mk=mk_object_not_connect, data_bathy_sel=data_bathy_sel, connect_hanging_nodes=False)
 
-        assert len(mk_object.mesh2d_get().node_x) == 4074
-        assert len(mk_object.mesh2d_get().face_nodes) == 17298
-        assert len(mk_object_no_edge_size.mesh2d_get().node_x) == 1806
-        assert len(mk_object_no_edge_size.mesh2d_get().face_nodes) == 7568
-        assert len(mk_object_not_connect.mesh2d_get().node_x) == 1806
-        assert len(mk_object_not_connect.mesh2d_get().face_nodes) == 6908
+        assert len(mk_object.mesh2d_get().node_x) == 4017
+        assert len(mk_object.mesh2d_get().face_nodes) == 17060
+        assert len(mk_object_no_edge_size.mesh2d_get().node_x) == 1738
+        assert len(mk_object_no_edge_size.mesh2d_get().face_nodes) == 7290
+        assert len(mk_object_not_connect.mesh2d_get().node_x) == 1738
+        assert len(mk_object_not_connect.mesh2d_get().face_nodes) == 6640
+
+
+@pytest.mark.unittest
+def test_meshkernel_refine_basegrid_within_polygon():
+    # domain and resolution
+    lon_min, lon_max, lat_min, lat_max = -68.55, -67.9, 11.8, 12.6
+    dxy = 0.05
+    crs = 'EPSG:4326'
+
+    # grid generation and refinement with GEBCO bathymetry
+    file_nc_bathy = r'https://opendap.deltares.nl/thredds/dodsC/opendap/deltares/Delft3D/netcdf_example_files/GEBCO_2022/GEBCO_2022_coarsefac08.nc'
+    data_bathy = xr.open_dataset(file_nc_bathy)
+    data_bathy_sel = data_bathy.sel(lon=slice(lon_min,lon_max),lat=slice(lat_min,lat_max)).elevation
+
+    data_bathy_sel.plot()
+    # basegrid
+    mk_object = dfmt.make_basegrid(lon_min, lon_max, lat_min, lat_max, dx=dxy, dy=dxy, crs=crs)
+    mk_object_withinpol = dfmt.make_basegrid(lon_min, lon_max, lat_min, lat_max, dx=dxy, dy=dxy, crs=crs)
+    
+    # polygon
+    line_array = np.array(
+        [[-68.4374835 ,  12.13974761],
+           [-68.06816694,  12.414679],
+           [-68.05551911,  11.98644083],
+           [-68.39954002,  11.95429586],
+           [-68.42230611,  12.10512995],
+           [-68.4374835 ,  12.13974761],
+           ])
+    polygon = GeometryList(
+        x_coordinates=line_array[:,0],
+        y_coordinates=line_array[:,1],
+        )
+    
+    # refine
+    min_edge_size = 300 #in meters
+    dfmt.refine_basegrid(mk=mk_object, data_bathy_sel=data_bathy_sel, min_edge_size=min_edge_size)
+    dfmt.refine_basegrid(mk=mk_object_withinpol, data_bathy_sel=data_bathy_sel, min_edge_size=min_edge_size, polygon=polygon)
+
+    assert len(mk_object.mesh2d_get().node_x) == 4017
+    assert len(mk_object.mesh2d_get().face_nodes) == 17060
+    assert len(mk_object_withinpol.mesh2d_get().node_x) == 1878
+    assert len(mk_object_withinpol.mesh2d_get().face_nodes) == 7976
 
 
 @pytest.mark.unittest
@@ -114,12 +170,12 @@ def test_meshkernel_delete_withcoastlines():
     dxy = 0.005
     mk = dfmt.make_basegrid(lon_min, lon_max, lat_min, lat_max, dx=dxy, dy=dxy, crs=4326)
     assert mk.get_projection() == ProjectionType.SPHERICAL
-    assert len(mk.mesh2d_get().face_nodes) == 20732
+    assert len(mk.mesh2d_get().face_nodes) == 20448
     
     # remove cells with GSHHS coastlines
     dfmt.meshkernel_delete_withcoastlines(mk=mk, res='h')
     
-    assert len(mk.mesh2d_get().face_nodes) == 17368
+    assert len(mk.mesh2d_get().face_nodes) == 17100
 
 
 @pytest.mark.unittest
@@ -147,12 +203,12 @@ def test_meshkernel_delete_withshp(tmp_path):
     mk = dfmt.make_basegrid(lon_min, lon_max, lat_min, lat_max, dx=dxy, dy=dxy, crs=4326)
     assert mk.get_projection() == ProjectionType.SPHERICAL
     
-    assert len(mk.mesh2d_get().face_nodes) == 20732
+    assert len(mk.mesh2d_get().face_nodes) == 20448
     
     # remove cells with a shapefile
     dfmt.meshkernel_delete_withshp(mk=mk, coastlines_shp=file_shp)
     
-    assert len(mk.mesh2d_get().face_nodes) == 17272
+    assert len(mk.mesh2d_get().face_nodes) == 17048
 
 
 @pytest.mark.unittest
@@ -163,23 +219,22 @@ def test_meshkernel_delete_withgdf():
     mk = dfmt.make_basegrid(lon_min, lon_max, lat_min, lat_max, dx=dxy, dy=dxy, crs=4326)
     assert mk.get_projection() == ProjectionType.SPHERICAL
 
-    assert len(mk.mesh2d_get().face_nodes) == 20732
+    assert len(mk.mesh2d_get().face_nodes) == 20448
     
     # remove cells with custom ldb_gdf (can also come from polyfile)
     bbox = (lon_min, lat_min, lon_max, lat_max)
     ldb_gdf = dfmt.get_coastlines_gdb(bbox=bbox, res='h')
     dfmt.meshkernel_delete_withgdf(mk=mk, coastlines_gdf=ldb_gdf)
     
-    assert len(mk.mesh2d_get().face_nodes) == 17368
+    assert len(mk.mesh2d_get().face_nodes) == 17100
 
 
 @pytest.mark.unittest
-def test_meshkernel_get_illegalcells():    
-    # input params
+def test_meshkernel_get_illegalcells():
+    # based on code in https://github.com/Deltares/MeshKernelPy/issues/253
     lon_min, lon_max, lat_min, lat_max = 147.75, 147.9, -40.4, -40.25
-    dxy = 0.05 #0.05
+    dxy = 0.05
     
-    # grid generation and refinement with GEBCO bathymetry
     # create base grid
     projection = ProjectionType.SPHERICAL
     make_grid_parameters = MakeGridParameters(angle=0,
@@ -206,7 +261,6 @@ def test_meshkernel_get_illegalcells():
     values_np = gebco_elev.flatten()
     gridded_samples = GriddedSamples(x_coordinates=lon_np,y_coordinates=lat_np,values=values_np)
     
-    
     #refinement
     mesh_refinement_parameters = MeshRefinementParameters(min_edge_size=min_edge_size, #always in meters
                                                           refinement_type=RefinementType(1), #Wavecourant/1,
@@ -219,20 +273,48 @@ def test_meshkernel_get_illegalcells():
                                               )    
     # cutcells
     geometry_separator = -999
-    xx = np.array([147.83625 , 147.839556, 147.855833, 147.877528, 147.904139,
-            147.911222, 147.885861, 147.849111, 147.85625 , 147.83625 ])
-    yy = np.array([-40.305028, -40.301667, -40.293778, -40.30625 , -40.291222,
-            -40.301639, -40.326278, -40.324611, -40.309222, -40.305028])
-    xx = np.concatenate([xx-0.075, [geometry_separator], xx])
-    yy = np.concatenate([yy, [geometry_separator], yy])
-    delete_pol_geom = GeometryList(x_coordinates=xx, y_coordinates=yy, geometry_separator=geometry_separator)
-    mk.mesh2d_delete(geometry_list=delete_pol_geom, 
-                     delete_option=DeleteMeshOption.INSIDE_NOT_INTERSECTED,
-                     invert_deletion=False)
+    # removes two square cells (resulting in 1 illegalcell)
+    xx1, yy1 = np.array([[147.77326613, -40.30182344],
+           [147.79012097, -40.30091608],
+           [147.78967742, -40.32541485],
+           [147.77237903, -40.32586853],
+           [147.77326613, -40.30182344]]).T
     
+    # removes some grid from the side
+    xx2, yy2 = np.array([[147.89701613, -40.34038632],
+           [147.95068548, -40.33675687],
+           [147.95245968, -40.40208693],
+           [147.89790323, -40.40299429],
+           [147.89701613, -40.34038632]]).T
+    
+    # removes two triangular and one square cell (resulting in 1 illegalcell)
+    xx3 = np.array([147.76125 , 147.764556, 147.780833, 147.802528, 147.829139,
+           147.836222, 147.810861, 147.774111, 147.78125 , 147.76125 ])
+    yy3 = np.array([-40.253028, -40.249667, -40.241778, -40.25425 , -40.239222,
+           -40.249639, -40.274278, -40.272611, -40.257222, -40.253028])
+    
+    # removes a large inner part of the grid (resulting in a hole, not an illegalcell)
+    xx4 = np.array([147.83625 , 147.839556, 147.855833, 147.877528, 147.904139,
+            147.911222, 147.885861, 147.849111, 147.85625 , 147.83625 ])
+    yy4 = np.array([-40.305028, -40.301667, -40.293778, -40.30625 , -40.291222,
+            -40.301639, -40.326278-0.05, -40.324611-0.05, -40.309222, -40.305028]) + 0.052
+    
+    xx_list = [xx1, xx2, xx3, xx4]
+    yy_list = [yy1, yy2, yy3, yy4]
+    for xx, yy in zip(xx_list, yy_list):
+        delete_pol_geom = GeometryList(x_coordinates=xx, y_coordinates=yy, geometry_separator=geometry_separator)
+        mk.mesh2d_delete(geometry_list=delete_pol_geom, 
+                         delete_option=DeleteMeshOption.INSIDE_NOT_INTERSECTED,
+                         invert_deletion=False)
+    
+    # assert the number of nodes and faces to check if we get illegalcells as expected
+    m2d = mk.mesh2d_get()
+    assert m2d.node_x.shape == (236,)
+    assert m2d.face_x.shape == (246,)
+    assert m2d.face_nodes.shape == (892,)
+
     # derive illegalcells as geodataframe
     illegalcells_gdf = dfmt.meshkernel_get_illegalcells(mk)
-    
     # assert number of polygons
     assert len(illegalcells_gdf) == 2
     # assert number of points per polygon
@@ -275,7 +357,7 @@ def test_meshkernel_to_UgridDataset(tmp_path):
     
     # create basegrid
     lon_min, lon_max, lat_min, lat_max = -6, 2, 48.5, 51.2
-    dxy = 0.5
+    dxy = 0.45
     make_grid_parameters = MakeGridParameters(origin_x=lon_min,
                                               origin_y=lat_min,
                                               upper_right_x=lon_max,
@@ -293,17 +375,21 @@ def test_meshkernel_to_UgridDataset(tmp_path):
     mrp = MeshRefinementParameters(min_edge_size=3000)
     mk.mesh2d_refine_based_on_polygon(polygon=geometry_list, mesh_refinement_params=mrp)
     
-    #convert to xugrid and write to netcdf
+    assert len(mk.mesh2d_get().face_x) == 605
+    assert len(mk.mesh2d_get().node_x) == 529
+    
+    #convert to xugrid
     xu_grid_uds = dfmt.meshkernel_to_UgridDataset(mk=mk, crs=crs)
-    netfile = tmp_path / 'test_startindex_net.nc'
-    xu_grid_uds.ugrid.to_netcdf(netfile)
     
     # plot
     import matplotlib.pyplot as plt
-    plt.close("all")
     fig,ax = plt.subplots()
     xu_grid_uds.grid.plot(ax=ax)
     ax.plot(pol_x,pol_y,'r-')
+
+    # write to netcdf
+    netfile = tmp_path / 'test_startindex_net.nc'
+    xu_grid_uds.ugrid.to_netcdf(netfile)
     
     #assert output grid
     ds_out = xr.open_dataset(netfile,decode_cf=False).load()
@@ -311,7 +397,7 @@ def test_meshkernel_to_UgridDataset(tmp_path):
     assert ds_out.mesh2d_face_nodes.attrs['start_index'] == 1
     assert 0 not in ds_out.mesh2d_face_nodes.to_numpy()
     assert ds_out.mesh2d_face_nodes.to_numpy().min() == -1
-    assert ds_out.mesh2d_face_nodes.to_numpy().max() == 626
+    assert ds_out.mesh2d_face_nodes.to_numpy().max() == 529
     assert "wgs84" in ds_out.variables
 
 
@@ -333,7 +419,7 @@ def test_meshkernel_get_bbox():
     mk.curvilinear_convert_to_mesh2d() #convert to ugrid/mesh2d
     
     bbox = dfmt.meshkernel_get_bbox(mk)
-    assert np.allclose(bbox, (-6.0, 48.5, 2.0, 51.40631301478466))
+    assert np.allclose(bbox, (-6.0, 48.5, 2.0, 51.403943603310026))
 
     
 @pytest.mark.unittest
@@ -374,4 +460,4 @@ def test_interpolate_bndpli():
     assert len(bnd_gdf) == 1
     assert len(bnd_gdf.geometry[0].xy[0]) == 99
     assert len(bnd_gdf_ref) == 1
-    assert len(bnd_gdf_ref.geometry[0].xy[0]) == 377
+    assert len(bnd_gdf_ref.geometry[0].xy[0]) == 380

@@ -209,11 +209,12 @@ def test_cmems_nc_to_ini_tracer(tmp_path, cmems_dataset_4times):
     
     ext_old = hcdfm.ExtOldModel()
     
+    # provide list to dir_pattern to also cover the list case in format_path
     ext_old = dfmt.cmems_nc_to_ini(ext_old=ext_old,
                                    dir_output=tmp_path,
                                    list_quantities=["tracerbndNO3"],
                                    tstart="2020-01-01",
-                                   dir_pattern=file_nc)
+                                   dir_pattern=[file_nc])
     
     file_expected = tmp_path / "initialtracerNO3_2020-01-01_00-00-00.nc"
     
@@ -271,7 +272,7 @@ def test_create_model_exec_files_none(tmp_path):
 def test_create_model_exec_files_docker(tmp_path):
     mdu_file = tmp_path / "temp_test.mdu"
     file_dimr = tmp_path / "dimr_config.xml"
-    file_docker = tmp_path / "run_docker.sh"
+    file_docker = tmp_path / "run_model.sh"
     
     nproc = 1 # number of processes
     dimrset_folder = "docker"
@@ -347,18 +348,75 @@ def test_make_paths_relative(tmp_path):
 
 
 @pytest.mark.unittest
+def test_preprocess_merge_meteofiles_era5(tmp_path, ds_era5_empty):
+    file_nc = os.path.join(tmp_path,"era5_msl_empty.nc")
+    ds_era5_empty.to_netcdf(file_nc)
+    
+    ext_old = hcdfm.ExtOldModel()
+    date_min = ds_era5_empty.time.to_pandas().iloc[0]
+    date_max = ds_era5_empty.time.to_pandas().iloc[-1]
+    varlist_list = ['msl']
+    ext_old = dfmt.preprocess_merge_meteofiles_era5(
+        ext_old=ext_old,
+        varkey_list=varlist_list,
+        dir_data=tmp_path,
+        dir_output=tmp_path,
+        time_slice=slice(date_min, date_max),
+        )
+
+
+@pytest.mark.unittest
 def test_preprocess_merge_meteofiles_era5_unsupported_varlist(tmp_path, ds_era5_empty):
     file_nc = os.path.join(tmp_path,"era5_msl_empty.nc")
     ds_era5_empty.to_netcdf(file_nc)
     
-    ext_old = None # this won't be reached, so not relevant what to supply
+    ext_old = hcdfm.ExtOldModel()
     date_min = ds_era5_empty.time.to_pandas().iloc[0]
     date_max = ds_era5_empty.time.to_pandas().iloc[-1]
-    varlist_list = ['msl']
-    with pytest.raises(KeyError) as e:
+    varlist_list = [['msl']]
+    with pytest.raises(TypeError) as e:
         ext_old = dfmt.preprocess_merge_meteofiles_era5(ext_old=ext_old,
                                                         varkey_list=varlist_list,
                                                         dir_data=tmp_path,
                                                         dir_output=tmp_path,
                                                         time_slice=slice(date_min, date_max))
-    assert "is not supported by dfmt.preprocess_merge_meteofiles_era5" in str(e.value)
+    error_msg = (
+        "varkey_list should not contain lists, support was dropped in favour of "
+        "supporting separate quantities. Provide a list of strings instead")
+    assert error_msg in str(e.value)
+
+
+@pytest.mark.unittest
+def test_preprocess_merge_meteofiles_era5_unsupported_varkey(tmp_path, ds_era5_empty):
+    file_nc = os.path.join(tmp_path,"era5_msl_empty.nc")
+    ds_era5_empty.to_netcdf(file_nc)
+    
+    ext_old = hcdfm.ExtOldModel()
+    date_min = ds_era5_empty.time.to_pandas().iloc[0]
+    date_max = ds_era5_empty.time.to_pandas().iloc[-1]
+    varlist_list = ['msla']
+    with pytest.raises(NotImplementedError) as e:
+        ext_old = dfmt.preprocess_merge_meteofiles_era5(ext_old=ext_old,
+                                                        varkey_list=varlist_list,
+                                                        dir_data=tmp_path,
+                                                        dir_output=tmp_path,
+                                                        time_slice=slice(date_min, date_max))
+    assert "The varkey 'msla' is not supported yet by" in str(e.value)
+
+
+@pytest.mark.unittest
+def test_preprocess_merge_meteofiles_era5_missing_files(tmp_path, ds_era5_empty):
+    file_nc = os.path.join(tmp_path,"era5_msl_empty.nc")
+    ds_era5_empty.to_netcdf(file_nc)
+    
+    ext_old = hcdfm.ExtOldModel()
+    date_min = ds_era5_empty.time.to_pandas().iloc[0]
+    date_max = ds_era5_empty.time.to_pandas().iloc[-1]
+    varlist_list = ['rhoao']
+    with pytest.raises(FileNotFoundError) as e:
+        ext_old = dfmt.preprocess_merge_meteofiles_era5(ext_old=ext_old,
+                                                        varkey_list=varlist_list,
+                                                        dir_data=tmp_path,
+                                                        dir_output=tmp_path,
+                                                        time_slice=slice(date_min, date_max))
+    assert "No files found for pattern" in str(e.value)

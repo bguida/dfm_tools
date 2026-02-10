@@ -132,7 +132,7 @@ def test_cds_credentials_oldurl_incorrectkey_rcfile():
     with pytest.raises(ValueError) as e:
         with pytest.warns(UserWarning) as w:
             cds_credentials()
-    assert "Old CDS URL found" in str(e.value)
+    assert "This means an old/incorrect CDSAPI URL was found" in str(e.value)
     assert "The CDS/ECMWF apikey file (~/.cdsapirc) was deleted" in str(e.value)
     assert "404 Client Error: Not Found for url:" in str(w[0].message)
     
@@ -143,7 +143,7 @@ def test_cds_credentials_oldurl_incorrectkey_rcfile():
     with pytest.raises(ValueError) as e:
         with pytest.warns(UserWarning) as w:
             cds_credentials()
-    assert "Old CDS URL found" in str(e.value)
+    assert "This means an old CDSAPI URL was found" in str(e.value)
     assert "The CDS/ECMWF apikey file (~/.cdsapirc) was deleted" in str(e.value)
     assert "certificate verify failed" in str(w[0].message)
     
@@ -164,7 +164,7 @@ def test_cds_credentials_oldurl_incorrectkey_envvars():
     with pytest.raises(ValueError) as e:
         with pytest.warns(UserWarning) as w:
             cds_credentials()
-    assert "Old CDS URL found" in str(e.value)
+    assert "This means an old/incorrect CDSAPI URL was found" in str(e.value)
     assert "The CDS/ECMWF apikey file (~/.cdsapirc) was deleted" in str(e.value)
     assert "404 Client Error: Not Found for url:" in str(w[0].message)
     
@@ -174,7 +174,7 @@ def test_cds_credentials_oldurl_incorrectkey_envvars():
     with pytest.raises(ValueError) as e:
         with pytest.warns(UserWarning) as w:
             cds_credentials()
-    assert "Old CDS URL found" in str(e.value)
+    assert "This means an old CDSAPI URL was found" in str(e.value)
     assert "The CDS/ECMWF apikey file (~/.cdsapirc) was deleted" in str(e.value)
     assert "certificate verify failed" in str(w[0].message)
 
@@ -195,7 +195,7 @@ def test_cds_credentials_newurl_oldkey_rcfile():
     cds_set_credentials_rcfile(cds_url_temp, cds_apikey_temp)
     with pytest.raises(ValueError) as e:
         cds_credentials()
-    assert "Old CDS API-key found (with :)" in str(e.value)
+    assert "This means an old CDSAPI KEY was found (with :)" in str(e.value)
     assert "The CDS/ECMWF apikey file (~/.cdsapirc) was deleted" in str(e.value)
     
     # restore credentials file/envvars
@@ -214,7 +214,7 @@ def test_cds_credentials_newurl_oldkey_envvars():
     os.environ["CDSAPI_KEY"] = "olduid:old-api-key"
     with pytest.raises(ValueError) as e:
         cds_credentials()
-    assert "Old CDS API-key found (with :)" in str(e.value)
+    assert "This means an old CDSAPI KEY was found (with :)" in str(e.value)
     assert "The CDS/ECMWF apikey file (~/.cdsapirc) was deleted" in str(e.value)
     
     # restore credentials file/envvars
@@ -353,35 +353,6 @@ def test_download_cmems(tmp_path, varkey):
     assert np.isclose(ds.longitude.to_numpy().max(), lon_max_exp)
     assert np.isclose(ds.latitude.to_numpy().min(), 51)
     assert np.isclose(ds.latitude.to_numpy().max(), lat_max_exp)
-
-
-@pytest.mark.unittest
-def test_download_hycom(tmp_path):
-    # domain
-    longitude_min, longitude_max, latitude_min, latitude_max =    2,   3,  51, 52 #test domain
-    date_min = '2010-01-01'
-    date_max = '2010-01-02'
-    varlist_hycom = ['surf_el']#'water_temp'] #['tau','water_u','water_v','water_temp','salinity','surf_el']
-    
-    for varkey in varlist_hycom:
-        # Path(dir_output).mkdir(parents=True, exist_ok=True)
-        period_range_years = pd.period_range(date_min,date_max,freq='Y')
-        dataset_url = [f'https://tds.hycom.org/thredds/dodsC/GLBu0.08/expt_19.1/{year}' for year in period_range_years] #list is possible with hycom, since it uses xr.open_mfdataset()
-        # temporary fix to avoid RuntimeError: NetCDF: file not found
-        # https://github.com/Deltares/dfm_tools/issues/1048
-        file_prefix = 'hycom_'
-        dfmt.download_OPeNDAP(dataset_url=dataset_url,
-                              varkey=varkey,
-                              longitude_min=longitude_min, longitude_max=longitude_max, latitude_min=latitude_min, latitude_max=latitude_max,
-                              date_min=date_min, date_max=date_max,
-                              dir_output=tmp_path, file_prefix=file_prefix, overwrite=True)
-
-    # assert downloaded files
-    file_nc_pat = os.path.join(tmp_path, "*.nc")
-    ds = xr.open_mfdataset(file_nc_pat)
-    assert ds.sizes["time"] == 2
-    assert ds.time.to_pandas().iloc[0] == pd.Timestamp('2010-01-01')
-    assert ds.time.to_pandas().iloc[-1] == pd.Timestamp('2010-01-02')
 
 
 @pytest.mark.requiressecrets

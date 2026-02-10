@@ -248,22 +248,25 @@ def reconstruct_zw_zcc_fromz(uds):
 
 def reconstruct_zw_zcc_fromzsigma(uds):
     """
-    reconstruct full grid output (time/face-varying z-values) for zsigmavalue model without full grid output. Implemented in https://issuetracker.deltares.nl/browse/UNST-5477
-    based on https://cfconventions.org/cf-conventions/cf-conventions.html#_ocean_sigma_over_z_coordinate
+    Reconstruct full grid output (time/face-varying z-values) for zsigmavalue model
+    without full grid output. Implemented in FM kernel with
+    https://issuetracker.deltares.nl/browse/UNST-5477. The reconstruction is based on
+    https://cfconventions.org/cf-conventions/cf-conventions.html#_ocean_sigma_over_z_coordinate
     """
     
     dimn_layer, dimn_interfaces = get_vertical_dimensions(uds)
     gridname = uds.grid.name
     
-    # temporarily decode default fillvalues
-    # TODO: xarray only decodes explicitly set fillvalues: https://github.com/Deltares/dfm_tools/issues/490
-    uds = xu.UgridDataset(decode_default_fillvals(uds.obj),grids=uds.grids)
+    # TODO: temporarily decode default fillvalues, xarray only decodes explicitly set
+    # fillvalues: https://github.com/Deltares/dfm_tools/issues/490
+    uds = xu.UgridDataset(decode_default_fillvals(uds.obj), grids=uds.grids)
     
     osz_formulaterms_int_dict = get_formula_terms(uds,varn_contains='interface')
     # osz_formulaterms_lay_dict = get_formula_terms(uds,varn_contains='layer')
     
     uds_eta = uds[osz_formulaterms_int_dict['eta']] #mesh2d_s1
-    uds_depth = uds[osz_formulaterms_int_dict['depth']] #mesh2d_bldepth: positive version of mesh2d_flowelem_bl, but this one is always in file
+    # mesh2d_bldepth positive version of mesh2d_flowelem_bl (but always present)
+    uds_depth = uds[osz_formulaterms_int_dict['depth']] #mesh2d_bldepth
     uds_depth_c = uds[osz_formulaterms_int_dict['depth_c']] #mesh2d_sigmazdepth
     uds_zlev_int = uds[osz_formulaterms_int_dict['zlev']] #mesh2d_interface_z
     uds_sigma_int = uds[osz_formulaterms_int_dict['sigma']] #mesh2d_interface_sigma
@@ -272,20 +275,26 @@ def reconstruct_zw_zcc_fromzsigma(uds):
     
     # for levels k where sigma(k) has a defined value and zlev(k) is not defined:
     # z(n,k,j,i) = eta(n,j,i) + sigma(k)*(min(depth_c,depth(j,i))+eta(n,j,i))
-    zw_sigmapart = uds_eta + uds_sigma_int*(uds_depth.clip(max=uds_depth_c)+uds_eta)
+    zw_sigmapart = uds_eta + uds_sigma_int*(uds_depth.clip(max=uds_depth_c) + uds_eta)
     # zcc_sigmapart = uds_eta + uds_sigma_lay*(uds_depth.clip(max=uds_depth_c)+uds_eta)
     # for levels k where zlev(k) has a defined value and sigma(k) is not defined: 
     # z(n,k,j,i) = zlev(k)
-    zw_zpart = uds_zlev_int.clip(min=-uds_depth) #added clipping of zvalues with bedlevel
-    # zcc_zpart = uds_zlev_lay.clip(min=-uds_depth) #added clipping of zvalues with bedlevel
+    # clip zvalues with bedlevel and waterlevel
+    zw_zpart = uds_zlev_int.clip(min=-uds_depth, max=uds_eta)
+    # zcc_zpart = uds_zlev_lay.clip(min=-uds_depth)
     zw = zw_sigmapart.fillna(zw_zpart)
     # zcc = zcc_sigmapart.fillna(zcc_zpart)
     
-    # correction: set interfaces below bed to nan (keeping the interface at the bed with shift)
+    # correction: set interfaces below bed to nan (shift preserves interface at the bed)
     bool_belowbed = zw.shift({dimn_interfaces:-1}) <= -uds_depth
     zw = zw.where(~bool_belowbed)
-    
-    # correction: set centers to values in between interfaces (and reshape+rename from int to cent dim)
+    # correction: set interfaces above wl to nan (keeping the interface at the wl with shift)
+    # required for waterlevels < zsigma-interface: https://github.com/Deltares/dfm_tools/issues/1218
+    bool_abovewl = zw.shift({dimn_interfaces:1}) >= uds_eta
+    zw = zw.where(~bool_abovewl)
+
+    # correction: set centers to values in between interfaces
+    # and reshape+rename from interfaces to centers dimension
     zcc = zw.rolling({dimn_interfaces:2}).mean()
     zcc = zcc.isel({dimn_interfaces:slice(1,None)}).rename({dimn_interfaces:dimn_layer})
     
@@ -326,7 +335,7 @@ def reconstruct_zw_zcc(uds:xu.UgridDataset):
     elif len(uds.filter_by_attrs(standard_name='ocean_sigma_z_coordinate')) != 0:
         print('zsigma-layer model, computing zw/zcc (fullgrid) values and treat as fullgrid model from here')
         uds = reconstruct_zw_zcc_fromzsigma(uds)
-    elif len(uds.filter_by_attrs(standard_name='ocean_sigma_coordinate')) != 0:
+    elif len(uds.reset_coords().filter_by_attrs(standard_name='ocean_sigma_coordinate')) != 0:
         print('sigma-layer model, computing zw/zcc (fullgrid) values and treat as fullgrid model from here')
         uds = reconstruct_zw_zcc_fromsigma(uds)
     elif f'{gridname}_layer_z' in uds.variables:
@@ -395,9 +404,12 @@ def get_Dataset_atdepths(data_xr:xu.UgridDataset, depths, reference:str ='z0'):
     else:
         depths = np.unique(depths) #array of unique+sorted floats/ints
         depth_dims = (depth_vardimname)
-    depths_xr = xr.DataArray(depths,dims=depth_dims,attrs={'units':'m',
-                                                           'reference':f'model_{reference}',
-                                                           'positive':'up'}) #TODO: make more in line with CMEMS etc
+    # TODO: make more in line with CMEMS etc
+    depths_xr = xr.DataArray(
+        depths,
+        dims=depth_dims,
+        attrs={'units':'m', 'reference':f'model_{reference}', 'positive':'up'}
+        )
     
     #potentially construct fullgrid info (zcc/zw)
     if dimn_layer is not None: #D-FlowFM mapfile
@@ -413,7 +425,8 @@ def get_Dataset_atdepths(data_xr:xu.UgridDataset, depths, reference:str ='z0'):
         zw_reference = data_xr[varname_zint] - data_wl
     elif reference=='bedlevel':
         if varname_bl not in data_xr.variables:
-            raise KeyError(f'get_Dataset_atdepths() called with reference=bedlevel, but {varname_bl} variable not present') #TODO: in case of zsigma/sigma it can also be -mesh2d_bldepth
+            # TODO: in case of zsigma/sigma it can also be -mesh2d_bldepth
+            raise KeyError(f'get_Dataset_atdepths() called with reference=bedlevel, but {varname_bl} variable not present')
         data_bl = data_xr[varname_bl]
         zw_reference = data_xr[varname_zint] - data_bl
     else:
@@ -422,20 +435,30 @@ def get_Dataset_atdepths(data_xr:xu.UgridDataset, depths, reference:str ='z0'):
     print('>> subsetting data on fixed depth in fullgrid z-data: ',end='')
     dtstart = dt.datetime.now()
     
-    #get layerbool via z-interface value (zw), check which celltop-interfaces are above/on depth and which which cellbottom-interfaces are below/on depth
+    # get layerbool via z-interface value (zw), check which celltop-interfaces are 
+    # above/on depth and which which cellbottom-interfaces are below/on depth
     bool_topinterface_abovedepth = zw_reference.isel({dimname_layw:slice(1,None)}) >= depths_xr
     bool_botinterface_belowdepth = zw_reference.isel({dimname_layw:slice(None,-1)}) <= depths_xr
-    bool_topbotinterface_arounddepth = bool_topinterface_abovedepth & bool_botinterface_belowdepth #this bool also automatically excludes all values below bed and above wl
-    bool_topbotinterface_arounddepth = bool_topbotinterface_arounddepth.rename({dimname_layw:dimname_layc}) #correct dimname for interfaces to centers
+    # reset coords to avoid unneccesary and expensive alignment of coordinates
+    bool_topinterface_abovedepth = bool_topinterface_abovedepth.reset_coords(drop=True)
+    bool_botinterface_belowdepth = bool_botinterface_belowdepth.reset_coords(drop=True)
+    # top&bot combination automatically excludes all values below bed and above wl
+    bool_topbotinterface_arounddepth = bool_topinterface_abovedepth & bool_botinterface_belowdepth
+    # correct dimname for interfaces to centers
+    bool_topbotinterface_arounddepth = bool_topbotinterface_arounddepth.rename({dimname_layw:dimname_layc})
     
-    #subset variables that have no, time, face and/or layer dims, slice only variables with all three dims (and add to subset)
-    bool_dims = [x for x in bool_topbotinterface_arounddepth.dims if x!=depth_vardimname] #exclude depth_vardimname (present if multiple depths supplied), since it is not present in pre-slice variables
+    # subset variables that have no, time, face and/or layer dims, slice only variables with all three dims (and add to subset)
+    # exclude depth_vardimname (present if multiple depths supplied), since it is not present in pre-slice variables
+    bool_dims = [x for x in bool_topbotinterface_arounddepth.dims if x!=depth_vardimname]
     variables_toslice = [var for var in data_xr.data_vars if set(bool_dims).issubset(data_xr[var].dims)]
     
-    #actual slicing with .where().max()
-    ds_atdepths = data_xr[variables_toslice].where(bool_topbotinterface_arounddepth).max(dim=dimname_layc,keep_attrs=True) #set all layers but one to nan, followed by an arbitrary reduce (max in this case) #TODO: check if attributes should be passed/altered
-    #TODO: suppress warning (upon plotting/load/etc): "C:\Users\veenstra\Anaconda3\envs\dfm_tools_env\lib\site-packages\dask\array\reductions.py:640: RuntimeWarning: All-NaN slice encountered" >> already merged in xarray: https://github.com/dask/dask/pull/9916
-    ds_atdepths = ds_atdepths.drop_dims([dimname_layw,dimname_layc],errors='ignore') #dropping interface dim if it exists, since it does not correspond to new depths dim
+    # actual slicing with .where().max()
+    # set all layers but one to nan, followed by an arbitrary reduce (max in this case)
+    # TODO: check if attributes should be passed/altered
+    ds_atdepths = data_xr[variables_toslice].where(bool_topbotinterface_arounddepth).max(dim=dimname_layc,keep_attrs=True)
+    # TODO: suppress warning (upon plotting/load/etc): "...\lib\site-packages\dask\array\reductions.py:640: RuntimeWarning: All-NaN slice encountered"
+    # dropping interface dim if it exists, since it does not correspond to new depths dim
+    ds_atdepths = ds_atdepths.drop_dims([dimname_layw,dimname_layc],errors='ignore')
     
     #add depth as coordinate var
     ds_atdepths[depth_vardimname] = depths_xr

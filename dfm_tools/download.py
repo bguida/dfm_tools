@@ -12,14 +12,39 @@ import shutil
 import subprocess
 import sys
 from requests import HTTPError
+<<<<<<< HEAD
+=======
+from requests.exceptions import SSLError
+import logging
+>>>>>>> bc4d8d3a347eacd2009fab8008430c2d1925250c
 
 __all__ = [
     "download_ERA5",
     "download_CMEMS",
+<<<<<<< HEAD
     "download_MED_CMEMS",
     "download_OPeNDAP",
 ]
 
+=======
+]
+
+logger = logging.getLogger(__name__)
+
+COPERNICUSMARINE_OPTIMIZE_ARGS = dict(
+    # speed up copernicusmarine.open_dataset() with the following arguments
+    # this optimizes chunking for downloading with daily frequency
+    # https://github.com/Deltares/dfm_tools/issues/1033
+    # also relevant to get time bounds
+    # https://github.com/Deltares/dfm_tools/issues/1058
+    service="arco-geo-series",
+    chunk_size_limit=0,
+    # prevent the need for buffering time/spatial extent
+    # https://github.com/Deltares/dfm_tools/issues/1050
+    coordinates_selection_method='outside',
+)
+
+>>>>>>> bc4d8d3a347eacd2009fab8008430c2d1925250c
 
 def download_ERA5(varkey,
                   longitude_min, longitude_max, latitude_min, latitude_max, 
@@ -108,8 +133,6 @@ def cds_credentials():
     try:
         # gets url/key from env vars or ~/.cdsapirc file
         c = cdsapi.Client()
-        cds_url = c.url
-        cds_apikey = c.key
     except Exception as e:
         if "Missing/incomplete configuration file" in str(e):
             # query apikey if not present in file or envvars
@@ -120,28 +143,31 @@ def cds_credentials():
             cds_url = cds_url_default
             cds_apikey = getpass.getpass("\nEnter your ECMWF API-key (string with dashes): ")
             cds_set_credentials(cds_url, cds_apikey)
+            c = cdsapi.Client()
         else:
             raise e
     
-    # remove cdsapirc file or env vars if the url/apikey are according to old format
-    old_urls = [
-        "https://cds.climate.copernicus.eu/api/v2",
-        "https://cds-beta.climate.copernicus.eu/api",
-        ]
-    if cds_url in old_urls:
-        # to avoid "HTTPError: 401 Client Error: Unauthorized for url"
-        cds_remove_credentials_raise(reason='Old CDS URL found')
-    if ":" in cds_apikey:
-        # to avoid "AttributeError: 'Client' object has no attribute 'client'"
-        cds_remove_credentials_raise(reason='Old CDS API-key found (with :)')
-    
-    # check if the authentication works
+    # check if the authentication works and catch some exceptions that occur
+    # with old or incorrect cdsapi urls or keys
     try:
-        c = cdsapi.Client()
+        # c = cdsapi.Client()
         c.client.check_authentication()
         print('found ECMWF API-key and authorization successful')
-    except HTTPError as e:
-        cds_remove_credentials_raise(reason=str(e))
+    except AttributeError as e:
+        #"AttributeError: 'Client' object has no attribute 'client'"
+        reason = str(e) + ". This means an old CDSAPI KEY was found (with :)"
+        cds_remove_credentials_raise(reason=reason)
+    except (HTTPError, SSLError) as e:
+        reason = str(e)
+        if "SSLError" in str(e):
+            # SSLError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: 
+            # self-signed certificate (_ssl.c:1000)
+            reason += ". This means an old CDSAPI URL was found (with cds-beta)"
+        elif "404 Client Error: Not Found for url:" in str(e):
+            # HTTPError: 404 Client Error: Not Found for url: https://cds.climate.
+            # copernicus.eu/api/v2/profiles/v1/account/verification/pat
+            reason += "This means an old/incorrect CDSAPI URL was found (e.g. with v2)"
+        cds_remove_credentials_raise(reason=reason)
 
 
 def cds_get_file():
@@ -324,50 +350,50 @@ def download_MED_CMEMS(varkey,
                 dataset_perperiod.to_netcdf(output_filename)
 
 def copernicusmarine_get_product(date_min, date_max, vartype):
+<<<<<<< HEAD
+=======
+    """
+    retrieve the time extents of reanalysis and forecast products. The time
+    extents of phy and bio can be different, so they have to be retrieved for
+    both.
+    """
+    
+>>>>>>> bc4d8d3a347eacd2009fab8008430c2d1925250c
     assert vartype in ['phy','bio']
     
     # the time extents between phy and bio can be different so we have to retrieve them both
     
     # time extents as global variables, so they only has to be retreived once per download run (otherwise once per variable)
     global phy_reanalysis_tstart, phy_reanalysis_tstop
-    global phy_reanalysis_int_tstart, phy_reanalysis_int_tstop
     global phy_forecast_tstart, phy_forecast_tstop
     global bio_reanalysis_tstart, bio_reanalysis_tstop
-    global bio_reanalysis_int_tstart, bio_reanalysis_int_tstop
     global bio_forecast_tstart, bio_forecast_tstop
     
     # retrieve times
     if vartype=='phy' and 'phy_reanalysis_tstart' not in globals():
-        print('retrieving time range of CMEMS reanalysis, reanalysis-interim and forecast products (phy)') #assuming here that physchem and bio reanalyisus/multiyear datasets have the same enddate, this seems safe
+        print('retrieving time range of CMEMS reanalysis and forecast products (phy)') #assuming here that physchem and bio reanalyisus/multiyear datasets have the same enddate, this seems safe
         phy_reanalysis_tstart, phy_reanalysis_tstop = copernicusmarine_dataset_timerange(dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m")
-        phy_reanalysis_int_tstart, phy_reanalysis_int_tstop = copernicusmarine_dataset_timerange(dataset_id="cmems_mod_glo_phy_myint_0.083deg_P1D-m")
         phy_forecast_tstart, phy_forecast_tstop = copernicusmarine_dataset_timerange(dataset_id="cmems_mod_glo_phy_anfc_0.083deg_P1D-m")
     if vartype=='bio' and 'bio_reanalysis_tstart' not in globals():
-        print('retrieving time range of CMEMS reanalysis, reanalysis-interim and forecast products (bio)') #assuming here that physchem and bio reanalyisus/multiyear datasets have the same enddate, this seems safe
+        print('retrieving time range of CMEMS reanalysis and forecast products (bio)') #assuming here that physchem and bio reanalyisus/multiyear datasets have the same enddate, this seems safe
         bio_reanalysis_tstart, bio_reanalysis_tstop = copernicusmarine_dataset_timerange(dataset_id="cmems_mod_glo_bgc_my_0.25deg_P1D-m")
-        bio_reanalysis_int_tstart, bio_reanalysis_int_tstop = copernicusmarine_dataset_timerange(dataset_id="cmems_mod_glo_bgc_myint_0.25deg_P1D-m")
         bio_forecast_tstart, bio_forecast_tstop = copernicusmarine_dataset_timerange(dataset_id="cmems_mod_glo_bgc-pft_anfc_0.25deg_P1D-m")
     
     # set current start/stop times dependent on whether we request phy/bio
     if vartype=='phy':
         reanalysis_tstart, reanalysis_tstop = phy_reanalysis_tstart, phy_reanalysis_tstop
-        reanalysis_int_tstart, reanalysis_int_tstop = phy_reanalysis_int_tstart, phy_reanalysis_int_tstop
         forecast_tstart, forecast_tstop = phy_forecast_tstart, phy_forecast_tstop
     if vartype=='bio' :
         reanalysis_tstart, reanalysis_tstop = bio_reanalysis_tstart, bio_reanalysis_tstop
-        reanalysis_int_tstart, reanalysis_int_tstop = bio_reanalysis_int_tstart, bio_reanalysis_int_tstop
         forecast_tstart, forecast_tstop = bio_forecast_tstart, bio_forecast_tstop
         
     if (date_min >= reanalysis_tstart) & (date_max <= reanalysis_tstop):
         product = 'reanalysis'
-    elif (date_min >= reanalysis_int_tstart) & (date_max <= reanalysis_int_tstop):
-        product = 'reanalysis-interim'
     elif (date_min >= forecast_tstart) & (date_max <= forecast_tstop):
         product = 'analysisforecast'
     else:
         raise ValueError(f'The requested timerange ({date_min} to {date_max}) is not fully within the timerange of one of the following datasets:\n'
                          f'- reanalysis: {reanalysis_tstart} to {reanalysis_tstop}\n'
-                         f'- reanalysis-interim: {reanalysis_int_tstart} to {reanalysis_int_tstop}\n'
                          f'- analysisforecast: {forecast_tstart} to {forecast_tstop}\n'
                          'Please adjust the requested timerange and try again.')
     print(f"The CMEMS '{product}' product will be used.")
@@ -439,8 +465,6 @@ def copernicusmarine_get_dataset_id(varkey, date_min, date_max):
                 dataset_id = 'cmems_mod_glo_phy-thetao_anfc_0.083deg_P1D-m'
             else:
                 dataset_id = 'cmems_mod_glo_phy_anfc_0.083deg_P1D-m'
-        elif product == 'reanalysis-interim': # reanalysis-interim: https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_BGC_001_029/description
-            dataset_id = 'cmems_mod_glo_phy_myint_0.083deg_P1D-m'
         else: # reanalysis: https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_PHY_001_030/description
             dataset_id = 'cmems_mod_glo_phy_my_0.083deg_P1D-m'
     elif vartype == 'bio': # for bio
@@ -456,8 +480,6 @@ def copernicusmarine_get_dataset_id(varkey, date_min, date_max):
                 dataset_id = 'cmems_mod_glo_bgc-nut_anfc_0.25deg_P1D-m'
             elif varkey in ['chl','phyc']:
                 dataset_id = 'cmems_mod_glo_bgc-pft_anfc_0.25deg_P1D-m'
-        elif product == 'reanalysis-interim': # reanalysis-interim: https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_BGC_001_029/description
-            dataset_id = 'cmems_mod_glo_bgc_myint_0.25deg_P1D-m'
         else: # reanalysis: https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_BGC_001_029/description
             dataset_id = 'cmems_mod_glo_bgc_my_0.25deg_P1D-m'
     else:
@@ -576,126 +598,3 @@ def copernicusmarine_dataset_timerange(dataset_id):
     ds_tstart = pd.Timestamp(ds.time.isel(time=0).values)
     ds_tstop = pd.Timestamp(ds.time.isel(time=-1).values)
     return ds_tstart, ds_tstop
-
-
-def open_OPeNDAP_xr(dataset_url):
-    """
-    
-    How to get the opendap dataset_url (HYCOM example):
-        - https://www.hycom.org/dataserver
-        - Select a product and search for THREDDS, e.g.: https://www.hycom.org/dataserver/gofs-3pt1/analysis
-        - find an opendap dataset_url, it depends per product/run where to find it.
-        Some examples:
-            https://tds.hycom.org/thredds/dodsC/GLBu0.08/expt_19.1/2010
-            https://tds.hycom.org/thredds/dodsC/GLBy0.08/expt_93.0
-
-    """
-        
-    if isinstance(dataset_url,list):
-        dataset_url_one = dataset_url[0]
-    else:
-        dataset_url_one = dataset_url
-    
-    if 'hycom.org' in dataset_url_one:
-        if isinstance(dataset_url,list):
-            print(f'xarray opening opendap dataset like: {dataset_url[0]}.html ({len(dataset_url)} urls/years)')
-            data_xr = xr.open_mfdataset(dataset_url,decode_times=False) #TODO: for some reason decode_times does not work: "ValueError: unable to decode time units 'hours since analysis' with 'the default calendar'."
-        else:
-            print(f'xarray opening opendap dataset: {dataset_url}.html')
-            data_xr = xr.open_dataset(dataset_url,decode_times=False) #TODO: for some reason decode_times does not work: "ValueError: unable to decode time units 'hours since analysis' with 'the default calendar
-        data_xr['time'] = cftime.num2date(data_xr.time,units=data_xr.time.units,calendar=data_xr.time.calendar)
-        data_xr = data_xr.rename({'lon':'longitude','lat':'latitude'})
-    else:
-        print(f'unspecified dataset_url, might fail: {dataset_url}')
-        if isinstance(dataset_url,list):
-            print(f'xarray opening opendap dataset like: {dataset_url[0]}.html ({len(dataset_url)} urls/years)')
-            data_xr = xr.open_mfdataset(dataset_url)
-        else:
-            print(f'xarray opening opendap dataset: {dataset_url}.html')
-            data_xr = xr.open_dataset(dataset_url)
-        if 'lon' in data_xr.dims:
-            data_xr = data_xr.rename({'lon':'longitude','lat':'latitude'})
-        
-    return data_xr
-
-
-def download_OPeNDAP(dataset_url,
-                     varkey,
-                     longitude_min, longitude_max, latitude_min, latitude_max, 
-                     date_min, date_max, freq='D',
-                     dir_output='.', file_prefix='', overwrite=False):
-    """
-    
-
-    Parameters
-    ----------
-    dataset_url : TYPE
-        DESCRIPTION.
-    varkey : TYPE
-        DESCRIPTION.
-    longitude_min : TYPE
-        DESCRIPTION.
-    longitude_max : TYPE
-        DESCRIPTION.
-    latitude_min : TYPE
-        DESCRIPTION.
-    latitude_max : TYPE
-        DESCRIPTION.
-    date_min : TYPE
-        DESCRIPTION.
-    date_max : TYPE
-        DESCRIPTION.
-    freq : TYPE, optional
-        DESCRIPTION. The default is 'D'.
-    dir_output : TYPE, optional
-        DESCRIPTION. The default is '.'.
-    file_prefix : TYPE, optional
-        DESCRIPTION. The default is ''.
-    overwrite : TYPE, optional
-        DESCRIPTION. The default is False.
-    
-    Raises
-    ------
-    KeyError
-        DESCRIPTION.
-    OutOfRangeError
-        DESCRIPTION.
-
-    Returns
-    -------
-    None.
-
-    """
-    
-    data_xr = open_OPeNDAP_xr(dataset_url=dataset_url)
-    
-    print(f'xarray subsetting data (variable \'{varkey}\' and lon/lat extents)')
-    if varkey not in data_xr.data_vars:
-        raise KeyError(f'"{varkey}" not found in dataset, available are: {list(data_xr.data_vars)}')
-    data_xr_var = data_xr[[varkey]]
-    data_xr_var = data_xr_var.sel(longitude=slice(longitude_min,longitude_max), #TODO: add depth selection?
-                                  latitude=slice(latitude_min,latitude_max))
-    data_xr_times = data_xr_var.time.to_series()
-    print(f'available time range in dataset from {data_xr_times.index[0]} to {data_xr_times.index[-1]}')
-    period_range = pd.period_range(date_min,date_max,freq=freq)
-    
-    #check if date_min/date_max are available in dataset
-    if not (data_xr_times.index[0] <= period_range[0].to_timestamp() <= data_xr_times.index[-1]):
-        raise OutOfRangeError(f'date_min ({period_range[0]}) is outside available time range in dataset: {data_xr_times.index[0]} to {data_xr_times.index[-1]}')
-    if not (data_xr_times.index[0] <= period_range[-1].to_timestamp() <= data_xr_times.index[-1]):
-        raise OutOfRangeError(f'date_max ({period_range[-1]}) is outside available time range in dataset: {data_xr_times.index[0]} to {data_xr_times.index[-1]}')
-    
-    for date in period_range:
-        date_str = str(date)
-        name_output = f'{file_prefix}{varkey}_{date_str}.nc'
-        file_out = Path(dir_output,name_output)
-        if file_out.is_file() and not overwrite:
-            print(f'"{name_output}" found and overwrite=False, continuing.')
-            continue
-        
-        print(f'xarray subsetting data per {period_range.freq}: {date_str}')
-        data_xr_var_seltime = data_xr_var.sel(time=slice(date_str,date_str)) #+' 12:00:00', 
-        
-        print(f'xarray writing netcdf file: {name_output}')
-        data_xr_var_seltime.to_netcdf(os.path.join(dir_output,name_output)) #TODO: add chunks={'time':1} or only possible with opening?
-        data_xr_var_seltime.close()

@@ -20,11 +20,10 @@ import glob
 import matplotlib.pyplot as plt
 import matplotlib.dates as md
 import shutil
-import fiona
 import copernicusmarine
 import cdsapi
 import logging
-
+from dfm_tools import settings
 
 __all__ = ["ssh_catalog_subset",
            "ssh_catalog_toxynfile",
@@ -33,14 +32,8 @@ __all__ = ["ssh_catalog_subset",
            "ssh_netcdf_overview",
            ]
 
-if os.name == "nt":
-    # windows drive letter should include trailing slash
-    # https://github.com/Deltares/dfm_tools/issues/1084
-    PDRIVE = "p:/"
-else:
-    PDRIVE = "/p"
-
 CM_LOGGER = logging.getLogger("copernicusmarine")
+logger = logging.getLogger(__name__)
 
 
 def _make_hydrotools_consistent(ds):
@@ -64,11 +57,25 @@ def _make_hydrotools_consistent(ds):
     y_attrs = dict(standard_name='latitude', units='degrees_north')
     ds["station_x_coordinate"] = xr.DataArray(ds.attrs["longitude"]).assign_attrs(x_attrs)
     ds["station_y_coordinate"] = xr.DataArray(ds.attrs["latitude"]).assign_attrs(y_attrs)
+    # set waterlevel coords
+    coords = ["station_name", "station_id", "station_x_coordinate", "station_y_coordinate"]
+    ds = ds.set_coords(coords)
+    return ds
 
 
 def _remove_accents(input_str):
-    nfkd_form = unicodedata.normalize('NFKD', input_str)
+    # replace characters that otherwise would be dropped
+    input_str_replaced = input_str.replace('ø','o')
+    
+    # convert string to ascii-only
+    nfkd_form = unicodedata.normalize('NFKD', input_str_replaced)
     only_ascii = nfkd_form.encode('ASCII', 'ignore').decode('ASCII')
+    
+    # warn if characters were dropped
+    if len(input_str) != len(only_ascii):
+        logger.warning(
+            f"_remove_accents() dropped characters: '{input_str}' became '{only_ascii}'"
+            )
     return only_ascii
 
 
@@ -94,7 +101,9 @@ def ssc_sscid_from_otherid(group_id, groupname):
     if bool_strinseries.sum() < 1:
         raise ValueError('sscid not found for id %s in group %s'%(group_id, groupname))
     if bool_strinseries.sum() > 1:
-        raise ValueError('More than 1 sscid found for id %s in group %s:\n%s'%(group_id, groupname, ssc_catalog_pd.loc[bool_strinseries,['name','country', 'geo:lat', 'geo:lon',groupname]]))
+        columns = ['name','country', 'geo:lat', 'geo:lon', groupname]
+        subset = ssc_catalog_pd.loc[bool_strinseries, columns]
+        raise ValueError(f'More than 1 sscid found for id {group_id} in group {groupname}:\n{subset}')
     
     sscid = ssc_catalog_pd.loc[bool_strinseries].index[0]
     return sscid
@@ -114,7 +123,7 @@ def ssc_ssh_subset_groups(groups, ssc_catalog_gpd=None):
     return ssc_catalog_gpd
 
 
-def ssc_ssh_read_catalog():
+def ssc_ssh_read_catalog(linked_stations=False):
     """
     The SSC catalog contains e.g. UHSLC and GLOSS ids, this can be used
     for unique station naming across several observation datasets
@@ -123,89 +132,81 @@ def ssc_ssh_read_catalog():
     station list: https://www.ioc-sealevelmonitoring.org/ssc/
     """
     
+    #TODO: country column has 2-digit codes instead of 3
     url_json = 'https://www.ioc-sealevelmonitoring.org/ssc/service.php?format=json'
     ssc_catalog_pd = pd.read_json(url_json)
-    
-    #TODO: country column has 2-digit codes instead of 3
     
     #convert all cells with ids to list of strings or NaN
     for colname in ['psmsl','ioc','ptwc','gloss','uhslc','sonel_gps','sonel_tg']:
         ssc_catalog_pd[colname] = ssc_catalog_pd[colname].apply(lambda x: x if isinstance(x,list) else [] if x is np.nan else [x])
     
-    ssc_catalog_pd['station_name'] = ssc_catalog_pd['name']
-    ssc_catalog_pd['station_id'] = ssc_catalog_pd['ssc_id']
-    
-    #generate station_name_fname (remove all non numeric/letter characters and replace by -, strip '-' from begin/end, set ssc_id as prefix)
-    ssc_catalog_pd['station_name_fname'] = ssc_catalog_pd['name'].str.replace('ø','o') # necessary since otherwise these letters are dropped with remove_accents()
-    ssc_catalog_pd['station_name_fname'] = ssc_catalog_pd['station_name_fname'].apply(lambda x: _remove_accents(x)) #remove accents from letters
-    bool_somethingdropped = (ssc_catalog_pd['station_name_fname'].str.len() != ssc_catalog_pd['name'].str.len())
-    if bool_somethingdropped.any():
-        raise Exception('lengths mismatch, characters were dropped:\n%s'%(ssc_catalog_pd.loc[bool_somethingdropped,['name','station_name_fname']]))
-    ssc_catalog_pd['station_name_fname'] = ssc_catalog_pd['station_name_fname'].apply(lambda x: re.sub("[^0-9a-zA-Z]+", "-", x)) #replace comma and brackets with dash
-    ssc_catalog_pd['station_name_fname'] = ssc_catalog_pd['station_name_fname'].str.strip('-') #remove first/last dash from name if present
-    col = ssc_catalog_pd.pop('station_name_fname')
-    ssc_catalog_pd.insert(3, col.name, col)
-    ssc_catalog_pd['station_name_unique'] = ssc_catalog_pd['ssc_id']+'_'+ssc_catalog_pd['station_name_fname']
+    # generate station_name_unique from name
+    station_name_clean = ssc_catalog_pd['name']
+    # remove accents
+    station_name_clean = station_name_clean.apply(lambda x: _remove_accents(x))
+    # replace all non-alphanumeric characters and with dash
+    station_name_clean = station_name_clean.apply(lambda x: re.sub("[^0-9a-zA-Z]+", "-", x))
+    # remove first/last dash from name if present
+    station_name_clean = station_name_clean.str.strip('-')
+    ssc_catalog_pd['station_name_unique'] = ssc_catalog_pd['ssc_id'] + '_' + station_name_clean
     
     #set ssc_id as index
     ssc_catalog_pd = ssc_catalog_pd.set_index('ssc_id',drop=False)
-    
-    #convert datetimestrings to datetime values, check for new ones
-    # last_retrieve = dt.date(2023,2,22)
-    # SSC_catalog_pd['dcterms:modified'] = pd.to_datetime(SSC_catalog_pd['dcterms:modified'])#.dt.to_pydatetime()
-    # bool_newstations = SSC_catalog_pd['dcterms:modified'] > pd.Timestamp(last_retrieve,tzinfo=pytz.UTC)#,tzinfo=dt.datetime.tzname('GMT'))
-    # num_newstations = bool_newstations.sum()
-    # if num_newstations > 0:
-    #     raise Exception('Caution, %i new stations since last retrieve on %s:\n%s'%(num_newstations, last_retrieve, SSC_catalog_pd.loc[bool_newstations.values,['name','dcterms:modified']]))
-    
-    # remove 64 DART stations (Deep-ocean Assessment and Reporting of Tsunamis)
-    # SSC_catalog_pd = SSC_catalog_pd.loc[~SSC_catalog_pd['name'].str.startswith('DART ')]
     
     # generate geom and geodataframe
     geom = [Point(x["geo:lon"], x["geo:lat"]) for irow, x in ssc_catalog_pd.iterrows()]
     ssc_catalog_gpd = gpd.GeoDataFrame(data=ssc_catalog_pd, geometry=geom, crs='EPSG:4326')
     ssc_catalog_gpd = ssc_catalog_gpd.drop(["geo:lon","geo:lat"], axis=1)
     
-    # compare coordinates of station metadata with coordinates of IOC/UHSLC linked stations
-    if 0: 
-        for station_ssc_id, row in ssc_catalog_gpd.iterrows():
-            idx = ssc_catalog_gpd.index.tolist().index(station_ssc_id)
-            print(f'station {idx+1} of {len(ssc_catalog_gpd)}: {station_ssc_id}')
-            ssc_catalog_pd_stat_ioc_uhslc = ssc_catalog_gpd.loc[station_ssc_id,['ioc','uhslc']]
+    rename_dict = {"name": "station_name", "ssc_id": "station_id"}
+    ssc_catalog_gpd = ssc_catalog_gpd.rename(rename_dict, axis=1)
     
-            url_station = f'https://www.ioc-sealevelmonitoring.org/ssc/stationdetails.php?id={station_ssc_id}'
-            url_response = urlopen(url_station)
-            url_response_read = url_response.read()
-            
-            station_meta_lon = ssc_catalog_gpd.loc[station_ssc_id].geometry.x
-            station_meta_lat = ssc_catalog_gpd.loc[station_ssc_id].geometry.y
-    
-            if (ssc_catalog_pd_stat_ioc_uhslc.str.len()==0).all(): #skip station if no IOC/UHSLC id present (after retrieval of precise coordinate)
-                continue
-            # fix html, fetch last matched table and set row with codes/location/lat/lon/sensors as column names
-            # TODO: report missing <tr> to VLIZ?
-            url_response_read_fixed = url_response_read.replace(b' colspan="100%"',b'').replace(b'<td><a href',b'<tr><td><a href')
-            table2 = pd.read_html(url_response_read_fixed, match='Linked codes', header=0)
-            tab_linked = table2[-1]
-            tab_linked.columns = tab_linked.iloc[0]
+    if linked_stations:
+        ssc_catalog_gpd = ssc_add_linked_stations(ssc_catalog_gpd)
+    return ssc_catalog_gpd
 
-            #loop over IOC/UHSLC linked stations
-            bool_tocheck = tab_linked["Codes"].str.contains('UHSLC') | tab_linked["Codes"].str.contains('IOC')
-            if bool_tocheck.sum()==0:
-                continue
-            tab_linked_tocheck = tab_linked.loc[bool_tocheck]
-            station_check_dict = {}
-            station_check_dist_all = []
-            for _, row in tab_linked_tocheck.iterrows():
-                station_check_lat = float(row['Latitude'])
-                station_check_lon = float(row['Longitude'])
-                station_check_dist = np.sqrt((station_meta_lat-station_check_lat)**2+(station_meta_lon-station_check_lon)**2)
-                station_check_dist_all.append(station_check_dist)
-                station_check_dict[row['Codes']] = [station_check_dist,station_check_lat,station_check_lon]
+
+def ssc_add_linked_stations(ssc_catalog_gpd):
+    """
+    Find xy-coordinates of UHSLC/IOC stations that are linked to the SSC stations,
+    including the min/max distance between them.
+    """
+    # getting linked catalogs
+    uhslc_catalog_gpd = _uhslc_get_json()
+    # uhslc index is dtype int but we use loc with dtype str
+    uhslc_catalog_gpd.index = uhslc_catalog_gpd.index.astype(str)
+    ioc_catalog_gpd = _ioc_get_json(showall="all")
+    # dropping duplicated code/geometry combinations
+    ioc_catalog_gpd = ioc_catalog_gpd.drop_duplicates(['Code','geometry'])
+    # ioc ids are not case sensitive, so convert entire IOC index to lowercase and 
+    # convert linked_id to lowercase to avoid KeyError
+    ioc_catalog_gpd.index = ioc_catalog_gpd.index.str.lower()
+
+    linked_dict = {"ioc": ioc_catalog_gpd,
+                   "uhslc": uhslc_catalog_gpd,
+                   }
+    for station_ssc_id, row in ssc_catalog_gpd.iterrows():
+        x1 = row["geometry"].x
+        y1 = row["geometry"].y
+        
+        station_check_dict = {}
+        station_check_dist_all = []
+        for linked_name, linked_gpd in linked_dict.items():
+            for linked_id in row[linked_name]:
+                linked_id = linked_id.lower()
+                geom = linked_gpd.loc[linked_id]["geometry"]
+                x2 = geom.x
+                y2 = geom.y
+                dist = ((x2-x1)**2 + (y2-y1)**2) **0.5
+                station_check_dist_all.append(dist)
+                station_key = f"{linked_name.upper()}: {linked_id}"
+                station_check_dict[station_key] = [x2, y2, dist]
+        
+        if station_check_dict:
+            # add additional columns if station_check_dict is not empty
             ssc_catalog_gpd.loc[station_ssc_id,'dist_dict'] = [station_check_dict]
             ssc_catalog_gpd.loc[station_ssc_id,'dist_min'] = np.min(station_check_dist_all)
             ssc_catalog_gpd.loc[station_ssc_id,'dist_max'] = np.max(station_check_dist_all)
-
     return ssc_catalog_gpd
 
 
@@ -302,11 +303,8 @@ def cmems_ssh_read_catalog(source, overwrite=True):
     return index_history_gpd
 
 
-def uhslc_ssh_read_catalog(source):
-    # TODO: country is "New Zealand" and country_code is 554. We would like country/country_code=NZL
-    # TODO: maybe use min of rqds and max of fast for time subsetting
-    # TODO: maybe enable merging of datasets?
-    uhslc_gpd = gpd.read_file("https://uhslc.soest.hawaii.edu/data/meta.geojson", engine="fiona")
+def _uhslc_get_json():
+    uhslc_gpd = gpd.read_file("https://uhslc.soest.hawaii.edu/data/meta.geojson")
     
     for drop_col in ["rq_basin", "rq_versions"]:
         if drop_col in uhslc_gpd.columns:
@@ -314,36 +312,64 @@ def uhslc_ssh_read_catalog(source):
     
     uhslc_gpd = uhslc_gpd.set_index('uhslc_id', drop=False)
     
-    # shift from 0to360 to -180to180
+    # shift from 0to360 to -180to180, round off to avoid 134.463+180=314.46299999999997
+    def _lon_360_to_180(lon):
+        return round((lon + 180)%360 - 180, 10)
     from shapely import Point
-    geom_shift = [Point(((pnt.x + 180)%360 - 180), pnt.y) for pnt in uhslc_gpd.geometry]
+    geom_shift = [Point(_lon_360_to_180(pnt.x), pnt.y) for pnt in uhslc_gpd.geometry]
     uhslc_gpd.geometry = geom_shift
+    return uhslc_gpd
+
+
+def uhslc_ssh_read_catalog():
+    # TODO: country is "New Zealand" and country_code is 554. We would like country/country_code=NZL
+    uhslc_gpd = _uhslc_get_json()
     
-    timespan_dict = {"uhslc-fast":"fd_span", "uhslc-rqds":"rq_span"}
-    timespan_var = timespan_dict[source]
-    time_min = uhslc_gpd[timespan_var].apply(lambda x: x["oldest"])
-    time_max = uhslc_gpd[timespan_var].apply(lambda x: x["latest"])
-    uhslc_gpd = uhslc_gpd.loc[~time_min.isnull()].copy()
-    uhslc_gpd["time_min"] = pd.to_datetime(time_min)
-    uhslc_gpd["time_max"] = pd.to_datetime(time_max)
+    time_min_rq = pd.to_datetime(uhslc_gpd["rq_span"].apply(lambda x: x["oldest"]))
+    time_max_rq = pd.to_datetime(uhslc_gpd["rq_span"].apply(lambda x: x["latest"]))
+    time_min_fd = pd.to_datetime(uhslc_gpd["fd_span"].apply(lambda x: x["oldest"]))
+    time_max_fd = pd.to_datetime(uhslc_gpd["fd_span"].apply(lambda x: x["latest"]))
+    # take the max of max and the min of min
+    time_min = pd.concat([time_min_rq, time_min_fd], axis=1).min(axis=1)
+    time_max = pd.concat([time_max_rq, time_max_fd], axis=1).max(axis=1)
+    uhslc_gpd["time_min"] = time_min
+    uhslc_gpd["time_max"] = time_max
     
-    uhslc_gpd["station_name"] = uhslc_gpd['name']
-    uhslc_gpd["station_id"] = uhslc_gpd['uhslc_id']
-    stat_names = source + "-" + uhslc_gpd['uhslc_id'].apply(lambda x: f"{x:03d}")
+    # remove accents from station names
+    # https://github.com/Deltares/dfm_tools/issues/1172
+    uhslc_gpd["name"] = uhslc_gpd["name"].apply(lambda x: _remove_accents(x))
+    
+    # define name/id columns
+    stat_names = "uhslc-" + uhslc_gpd['uhslc_id'].apply(lambda x: f"{x:03d}")
     uhslc_gpd["station_name_unique"] = stat_names
+    rename_dict = {"name": "station_name", "uhslc_id": "station_id"}
+    uhslc_gpd = uhslc_gpd.rename(rename_dict, axis=1)
     
-    uhslc_gpd["time_ndays"] = (uhslc_gpd['time_max'] - uhslc_gpd['time_min']).dt.total_seconds()/3600/24
+    time_diff = uhslc_gpd['time_max'] - uhslc_gpd['time_min']
+    uhslc_gpd["time_ndays"] = time_diff.dt.total_seconds()/3600/24
     return uhslc_gpd
 
 
-def uhslc_rqds_ssh_read_catalog():
-    uhslc_gpd = uhslc_ssh_read_catalog(source="uhslc-rqds")
-    return uhslc_gpd
-
-
-def uhslc_fast_ssh_read_catalog():
-    uhslc_gpd = uhslc_ssh_read_catalog(source="uhslc-fast")
-    return uhslc_gpd
+def _ioc_get_json(showall="a"):
+    """
+    howto available at https://www.ioc-sealevelmonitoring.org/service.php?query=help
+    """
+    url_json = f'https://www.ioc-sealevelmonitoring.org/service.php?query=stationlist&showall={showall}'
+    resp = requests.get(url_json)
+    if resp.status_code==404: #continue to next station if not found
+        raise Exception(f'url 404: {resp.text}')
+    resp_json = resp.json()
+    ioc_catalog_pd = pd.DataFrame.from_dict(resp_json)
+    
+    #set ssc_id as index
+    ioc_catalog_pd = ioc_catalog_pd.set_index('Code',drop=False)
+    
+    # generate geom and geodataframe and remove the old columns
+    geom = [Point(x["lon"], x["lat"]) for irow, x in ioc_catalog_pd.iterrows()]
+    ioc_catalog_gpd = gpd.GeoDataFrame(data=ioc_catalog_pd, geometry=geom, crs='EPSG:4326')
+    drop_list = ["Lon","lat","lon","lat"]
+    ioc_catalog_gpd = ioc_catalog_gpd.drop(drop_list, axis=1)
+    return ioc_catalog_gpd
 
 
 def ioc_ssh_read_catalog(drop_uhslc=True, drop_dart=True, drop_nonutc=True):
@@ -355,27 +381,12 @@ def ioc_ssh_read_catalog(drop_uhslc=True, drop_dart=True, drop_nonutc=True):
     """
     #TODO: "Code" contains more station codes than "code", what is the difference?
     #TODO: "Location" contains full name, but contains spaces etcetera, retrieve from SSC instead?
-    
-    url_json = 'https://www.ioc-sealevelmonitoring.org/service.php?query=stationlist&showall=a'
-    resp = requests.get(url_json)
-    if resp.status_code==404: #continue to next station if not found
-        raise Exception(f'url 404: {resp.text}')    
-    resp_json = resp.json()
-    ioc_catalog_pd = pd.DataFrame.from_dict(resp_json)
-    
-    #set ssc_id as index
-    ioc_catalog_pd = ioc_catalog_pd.set_index('Code',drop=False)
+    ioc_catalog_gpd = _ioc_get_json(showall="a")
     
     #derive start/stop times indications from metadata
-    ioc_catalog_pd["time_min"] = pd.to_datetime(ioc_catalog_pd["date_created"])
-    ioc_catalog_pd["time_max"] = pd.to_datetime(ioc_catalog_pd["lasttime"])
-    
-    # generate geom and geodataframe and remove the old columns
-    geom = [Point(x["lon"], x["lat"]) for irow, x in ioc_catalog_pd.iterrows()]
-    ioc_catalog_gpd = gpd.GeoDataFrame(data=ioc_catalog_pd, geometry=geom, crs='EPSG:4326')
-    drop_list = ["Lon","lat","lon","lat"]
-    ioc_catalog_gpd = ioc_catalog_gpd.drop(drop_list, axis=1)
-    
+    ioc_catalog_gpd["time_min"] = pd.to_datetime(ioc_catalog_gpd["date_created"])
+    ioc_catalog_gpd["time_max"] = pd.to_datetime(ioc_catalog_gpd["lasttime"])
+        
     ioc_catalog_gpd["station_name"] = ioc_catalog_gpd['Code']
     ioc_catalog_gpd["station_id"] = ioc_catalog_gpd['Code']
     stat_names = "ioc-" + ioc_catalog_gpd['Code'] + "-" + ioc_catalog_gpd['code'].astype(str)
@@ -454,10 +465,8 @@ def psmsl_gnssir_ssh_read_catalog_gettimes(station_list_gpd):
 
     return station_list_gpd
 
-
-def gesla3_ssh_read_catalog(file_gesla3_meta=None, only_coastal=True):
-    if file_gesla3_meta is None:
-        file_gesla3_meta = os.path.join(PDRIVE, "1230882-emodnet_hrsm", "data", "GESLA3", "GESLA3_ALL 2.csv")
+def gesla3_ssh_read_catalog(only_coastal=True):
+    file_gesla3_meta = os.path.join(settings.PATH_GESLA3, "GESLA3_ALL 2.csv")
     
     if not os.path.isfile(file_gesla3_meta):
         raise FileNotFoundError(f"The 'file_gesla3_meta' file '{file_gesla3_meta}' was not found. "
@@ -493,8 +502,8 @@ def gesla3_ssh_read_catalog(file_gesla3_meta=None, only_coastal=True):
 
 
 def rwsddl_ssh_meta_dict():
-    # combination for measured waterlevels
-    meta_dict = {'Grootheid.Code':'WATHTE', 'Groepering.Code':'NVT'}
+    # combination for measured waterlevels (no astro, no extremes)
+    meta_dict = {'ProcesType':'meting', 'Grootheid.Code':'WATHTE', 'Groepering.Code':''}
     return meta_dict
 
 
@@ -537,9 +546,13 @@ def rwsddl_ssh_read_catalog(meta_dict=None):
     # add "Code" index as column and reset the index
     selected = selected.reset_index()
     
-    xcoords = selected["X"]
-    ycoords = selected["Y"]
+    xcoords = selected["Lon"]
+    ycoords = selected["Lat"]
     epsg_all = selected["Coordinatenstelsel"]
+    # TODO: manually replacing crs name with epsg, the old waterwebservices had epsg in
+    # this column, would be great if new wws also has this.
+    # https://github.com/Rijkswaterstaat/WaterWebservices/issues/20
+    epsg_all = epsg_all.replace("ETRS89", "4258")
     epsg_uniq = epsg_all.unique()
     if len(epsg_uniq)>1:
         raise ValueError(f"multiple EPSG codes in one LocatieLijst not supported: {epsg_uniq.tolist()}")
@@ -588,7 +601,7 @@ def gtsm3_era5_cds_ssh_read_catalog():
     return station_list_gpd  
 
 
-def cmems_ssh_retrieve_data(row, dir_output, time_min=None, time_max=None,
+def cmems_ssh_retrieve_data(row, time_min=None, time_max=None,
                             level="WARNING"):
     """
     Retrieve data from copernicusmarine files service
@@ -652,45 +665,33 @@ def cmems_ssh_retrieve_data(row, dir_output, time_min=None, time_max=None,
     return ds
 
 
-def uhslc_ssh_retrieve_data(row, dir_output, time_min=None, time_max=None):
+def _preprocess_uhslc_erddap(ds):
+    # drop rowSize before merging to avoid conflicts
+    ds = ds.drop_vars("rowSize")
     
-    # TODO: maybe merge rqds/fast datasets automatically
-    # TODO: 5 meter offset?
+    # dropping all geospatial vars/attrs since they are not always consistent
+    # UHSLC_ID=7 has ds_rqds.latitude=7.333 and ds_fast.latitude=7.33
+    # UHSLC_ID=9 has geospatial_lat_min=-9.425 and geospatial_lat_max=-9.421
+    # more info: https://github.com/Deltares/dfm_tools/issues/1192
+    lon_attrs = ["geospatial_lon_min", "geospatial_lon_max", "Easternmost_Easting", "Westernmost_Easting"]
+    lat_attrs = ["geospatial_lat_min", "geospatial_lat_max", "Northernmost_Northing", "Southernmost_Northing"]
+    for attr in lon_attrs+lat_attrs:
+        ds.attrs.pop(attr, None)
+    ds = ds.drop_vars(["latitude", "longitude"], errors='ignore')
     
-    # docs from https://ioos.github.io/erddapy/ and https://ioos.github.io/erddapy/02-extras-output.html#
-    
-    # setup server connection, this takes no time so does not have to be cached
-    server = "https://uhslc.soest.hawaii.edu/erddap"
-    e = ERDDAP(server=server, protocol="tabledap", response="nc") #opendap is way slower than nc/csv/html
-    
-    dataset_id_dict = {"uhslc-fast":"global_hourly_fast",
-                       "uhslc-rqds":"global_hourly_rqds"}
-    
-    uhslc_id = row.name
-    source = row["source"]
-    dataset_id = dataset_id_dict[source]
-    e.dataset_id = dataset_id
-    
-    # set erddap constraints
-    e.constraints = {}
-    e.constraints["uhslc_id="] = uhslc_id
-    if time_min is not None:
-        e.constraints["time>="] = pd.Timestamp(time_min)
-    if time_max is not None:
-        e.constraints["time<="] = pd.Timestamp(time_max)
-    
-    from httpx import HTTPError
-    try:
-        ds = e.to_xarray()
-    except HTTPError:
-        # no data so early return
-        return
+    # drop station_name since it conflicts between rqds and fast uhslc_id 53/108/more
+    ds = ds.drop_vars(["station_name"], errors='ignore')
+
+    # reduce dataset size by reducing all constant variables defined for each timestep
+    constant_vars = ['station_country', 'station_country_code', 'gloss_id', 'ssc_id', 'last_rq_date']
+    reduce_vars = set(ds.variables).intersection(constant_vars)
+    logging.debug(f"UHSLC reducing variables {reduce_vars}")
+    for var in reduce_vars:
+        ds[var] = ds[var].max(dim='obs')
     
     # reduce timeseries dimension
     assert ds.sizes["timeseries"] == 1
     ds = ds.max(dim="timeseries", keep_attrs=True)
-    # check if lat/lon variables were also dropped, these are already present as attrs
-    assert "latitude" not in ds.variables
     
     # change units to meters
     with xr.set_options(keep_attrs=True):
@@ -701,30 +702,119 @@ def uhslc_ssh_retrieve_data(row, dir_output, time_min=None, time_max=None):
     
     # set time index
     ds = ds.set_index(obs="time").rename(obs="time")
-    ds['time'] = ds.time.dt.round('s') #round to seconds
+    # round times to seconds, should probably not be necessary
+    ds['time'] = ds.time.dt.round('s')
+    
+    # rename some important conflicting attributes to avoid dropping by xr.concat
+    dsid = ds.attrs["id"] # global_hourly_rqds/global_hourly_fast
+    dsid_short = dsid.split("_")[-1] # rqds/fast
+    for attr in ["acknowledgement", "processing_level", "title"]:
+        ds.attrs[f"{attr}_{dsid_short}"] = ds.attrs.pop(attr)
+
+    return ds
+
+
+def _uhslc_ssh_retrieve_data_oneds(e, ds_list):
+    """
+    retrieve rqds/fast dataset by calling ERDDAP.to_xarray(). If this succeeds the
+    dataset is preprocessed and appended to ds_list.
+    
+    It is also possible that the request fails with a HTTPError. In that case
+    only raise a HTTPError with code!=404, so at least two errors are filtered/accepted
+    and let the code continue without breaking.
+    
+    *** httpx.HTTPError: Error {
+        code=404;
+        message="Not Found: Your query produced no matching results. (nRows = 0)";
+    }
+    
+    *** httpx.HTTPError: Error {
+        code=404;
+        message="Not Found: Your query produced no matching results. 
+        (time>=3000-01-01T00:00:00Z is outside of the variable's actual_range: 
+         1846-01-04T00:00:00Z to 2023-12-31T22:59:59Z)";
+    }
+    
+    Any other HTTPErrors like timeouts (504) or outages (503), are still raised.
+    This also goes for any other Exception.
+    
+    In all error-cases, nothing is appended to ds_list.
+    """
+    from httpx import HTTPError
+    try:
+        ds = e.to_xarray()
+        ds = _preprocess_uhslc_erddap(ds)
+        ds_list.append(ds)
+    except HTTPError as err:
+        if not "code=404" in str(err):
+            raise
+
+
+def uhslc_ssh_retrieve_data(row, time_min=None, time_max=None, include_rqds=True, include_fast=True):
+    # docs from https://ioos.github.io/erddapy/ and https://ioos.github.io/erddapy/02-extras-output.html#
+    
+    # setup server connection, this takes no time so does not have to be cached
+    # opendap is way slower than nc/csv/html
+    server = "https://uhslc.soest.hawaii.edu/erddap"
+    e = ERDDAP(server=server, protocol="tabledap", response="nc")
+    
+    # set erddap constraints
+    e.constraints = {}
+    uhslc_id = row.name
+    e.constraints["uhslc_id="] = uhslc_id
+    if time_min is not None:
+        e.constraints["time>="] = pd.Timestamp(time_min)
+    if time_max is not None:
+        e.constraints["time<="] = pd.Timestamp(time_max)
+    
+    ds_list = []
+    if include_rqds:
+        e.dataset_id = "global_hourly_rqds"
+        _uhslc_ssh_retrieve_data_oneds(e, ds_list)
+    if include_fast:
+        e.dataset_id = "global_hourly_fast"
+        _uhslc_ssh_retrieve_data_oneds(e, ds_list)
+    
+    # return early if no data present
+    if len(ds_list) == 0:
+        return
+    
+    # merge/concat: coords/data_vars/compat/combine_attrs make sure errors are raised
+    # if the datasets are not equal enough. All inequalities should be resolved by
+    # _preprocess_uhslc_erddap() so there should be no error.
+    ds = xr.concat(
+        ds_list,
+        dim='time',
+        coords='minimal',
+        data_vars='minimal',
+        compat='equals',
+        combine_attrs='drop_conflicts',
+        )
+    
+    # drop duplicates, keep=first keeps rqds, sort by time
+    ds = ds.drop_duplicates(dim='time', keep='first').sortby('time')
     return ds
 
 
 @functools.lru_cache
-def gesla3_cache_zipfile(file_gesla3_data=None):
-    if file_gesla3_data is None:
-        file_gesla3_data = os.path.join(PDRIVE, "1230882-emodnet_hrsm", "data", "GESLA3", "GESLA3.0_ALL.zip")
+def gesla3_cache_zipfile():
+    file_gesla3_data = os.path.join(settings.PATH_GESLA3, "GESLA3.0_ALL.zip")
 
     if not os.path.isfile(file_gesla3_data):
         raise FileNotFoundError(
-            f"The 'file_gesla3_data' file '{file_gesla3_data}' was not found. "
-            "You can download it from https://gesla787883612.wordpress.com/"
-            "downloads and provide the path")
+            f"The 'file_gesla3_data' file '{file_gesla3_data}' was not found. You can "
+            "download it from https://gesla787883612.wordpress.com/downloads and provide "
+            "the path: `import dfm_tools as dfmt; dfmt.settings.PATH_GESLA3 = 'path/to/gesla3'`"
+            )
     
     gesla3_zip = ZipFile(file_gesla3_data)
     return gesla3_zip
 
 
-def gesla3_ssh_retrieve_data(row, dir_output, time_min=None, time_max=None,
-                             file_gesla3_data=None):
+def gesla3_ssh_retrieve_data(row, time_min=None, time_max=None):
     
     # get cached gesla3 zipfile instance
-    gesla3_zip = gesla3_cache_zipfile(file_gesla3_data=file_gesla3_data)
+    gesla3_zip = gesla3_cache_zipfile()
     
     file_gesla = row.name
     with gesla3_zip.open(file_gesla, "r") as f:
@@ -759,7 +849,7 @@ def gesla3_ssh_retrieve_data(row, dir_output, time_min=None, time_max=None,
     return ds
 
 
-def ioc_ssh_retrieve_data(row, dir_output, time_min, time_max, subset_hourly=False):
+def ioc_ssh_retrieve_data(row, time_min, time_max, subset_hourly=False):
     
     # https://www.ioc-sealevelmonitoring.org/service.php?query=help
     
@@ -813,7 +903,7 @@ def ioc_ssh_retrieve_data(row, dir_output, time_min, time_max, subset_hourly=Fal
     return ds
 
 
-def psmsl_gnssir_ssh_retrieve_data(row, dir_output, time_min=None, time_max=None):
+def psmsl_gnssir_ssh_retrieve_data(row, time_min=None, time_max=None):
     
     # https://psmsl.org/data/gnssir/gnssir_daily_means.html
     # https://psmsl.org/data/gnssir/gnssir_example.html (also contains IOC retrieval example)
@@ -840,7 +930,7 @@ def psmsl_gnssir_ssh_retrieve_data(row, dir_output, time_min=None, time_max=None
     return ds
 
 
-def rwsddl_ssh_retrieve_data(row, dir_output, time_min, time_max):
+def rwsddl_ssh_retrieve_data(row, time_min, time_max):
     
     if time_min is None or time_max is None:
         raise ValueError("cannot supply None for 'time_min' or 'time_max' to 'rwsddl_ssh_retrieve_data()'")
@@ -853,7 +943,7 @@ def rwsddl_ssh_retrieve_data(row, dir_output, time_min, time_max):
         return
     
     # minimize disk usage of StatuswaardeLijst by converting to U1
-    varn_status = "WaarnemingMetadata.StatuswaardeLijst"
+    varn_status = "WaarnemingMetadata.Statuswaarde"
     status_dict = {"O":"Ongecontroleerd",
                    "G":"Gecontroleerd",
                    "D":"Definitief"}
@@ -861,26 +951,18 @@ def rwsddl_ssh_retrieve_data(row, dir_output, time_min, time_max):
         measurements[varn_status] = measurements[varn_status].str.replace(v, k)
     
     # convert to xarray (dropping some constant columns)
-    drop_if_constant = ["WaarnemingMetadata.OpdrachtgevendeInstantieLijst",
-                        "WaarnemingMetadata.BemonsteringshoogteLijst",
-                        "WaarnemingMetadata.ReferentievlakLijst",
-                        "AquoMetadata_MessageID",
-                        "BioTaxonType", 
-                        "BemonsteringsSoort.Code",
-                        "Compartiment.Code",
-                        "Eenheid.Code",
-                        "Grootheid.Code",
-                        "Hoedanigheid.Code",
-                        "WaardeBepalingsmethode.Code",
-                        "MeetApparaat.Code",
-                        ]
-    ds = ddlpy.dataframe_to_xarray(measurements, drop_if_constant)
+    always_preserve = [
+        "Meetwaarde.Waarde_Numeriek",
+        "WaarnemingMetadata.Kwaliteitswaardecode",
+        "WaarnemingMetadata.Statuswaarde",
+        ]
+    ds = ddlpy.dataframe_to_xarray(df=measurements, always_preserve=always_preserve)
     
     ds[varn_status] = ds[varn_status].assign_attrs(status_dict)
     
     rename_dict = {'Meetwaarde.Waarde_Numeriek':'waterlevel',
-                   'WaarnemingMetadata.KwaliteitswaardecodeLijst':'qc',
-                   'WaarnemingMetadata.StatuswaardeLijst':'status'}
+                   'WaarnemingMetadata.Kwaliteitswaardecode':'qc',
+                   'WaarnemingMetadata.Statuswaarde':'status'}
     ds = ds.rename_vars(rename_dict)
     
     # convert meters to cm
@@ -893,7 +975,6 @@ def rwsddl_ssh_retrieve_data(row, dir_output, time_min, time_max):
 
 
 def gtsm3_era5_cds_ssh_retrieve_data(row,
-                                     dir_output,
                                      time_min=None,
                                      time_max=None,
                                      time_freq='10_min',
@@ -903,6 +984,7 @@ def gtsm3_era5_cds_ssh_retrieve_data(row,
     for time and stations is done after download. The function checks if the files have
     already been downloaded to cache.
     """
+    cds_version = 'v3'
     
     if time_min is None:
         time_min = row['time_min']
@@ -917,9 +999,10 @@ def gtsm3_era5_cds_ssh_retrieve_data(row,
     time_periods = pd.period_range(start=time_min, end=time_max, freq='M')
     
     time_freq_cds_str = time_freq.replace("_","")
-    file_pat = os.path.join(dir_cache_gtsm,
-                            f'reanalysis_waterlevel_{time_freq_cds_str}_*_v2.nc',
-                            )
+    file_pat = os.path.join(
+        dir_cache_gtsm,
+        f'reanalysis_waterlevel_{time_freq_cds_str}_*_{cds_version}.nc',
+        )
     # Retrieve data via an API request and extract archive (if not found in the cache)
     for period in time_periods:
         period_cds_str = str(period).replace("-","_")
@@ -947,6 +1030,7 @@ def gtsm3_era5_cds_ssh_retrieve_data(row,
                 'temporal_aggregation': time_freq,
                 'year': str(period.year),
                 'month': str(period.month).zfill(2),
+                'version': cds_version,
                 'format': 'zip',
             }, 
             tmp_zipfile)
@@ -983,8 +1067,7 @@ def ssh_catalog_subset(source=None,
                    "ioc": ioc_ssh_read_catalog,
                    "cmems": cmems_my_ssh_read_catalog,
                    "cmems-nrt": cmems_nrt_ssh_read_catalog,
-                   "uhslc-fast": uhslc_fast_ssh_read_catalog,
-                   "uhslc-rqds": uhslc_rqds_ssh_read_catalog,
+                   "uhslc": uhslc_ssh_read_catalog,
                    "psmsl-gnssir": psmsl_gnssir_ssh_read_catalog,
                    "rwsddl": rwsddl_ssh_read_catalog,
                    "gtsm3-era5-cds": gtsm3_era5_cds_ssh_read_catalog,
@@ -1029,8 +1112,7 @@ def ssh_retrieve_data(ssh_catalog_gpd, dir_output, time_min=None, time_max=None,
                    "ioc": ioc_ssh_retrieve_data,
                    "cmems": cmems_ssh_retrieve_data,
                    "cmems-nrt": cmems_ssh_retrieve_data,
-                   "uhslc-fast": uhslc_ssh_retrieve_data,
-                   "uhslc-rqds": uhslc_ssh_retrieve_data,
+                   "uhslc": uhslc_ssh_retrieve_data,
                    "psmsl-gnssir": psmsl_gnssir_ssh_retrieve_data,
                    "rwsddl": rwsddl_ssh_retrieve_data,
                    "gtsm3-era5-cds": gtsm3_era5_cds_ssh_retrieve_data,
@@ -1047,7 +1129,7 @@ def ssh_retrieve_data(ssh_catalog_gpd, dir_output, time_min=None, time_max=None,
     for idx_arbitrary, row in ssh_catalog_gpd.iterrows():
         irow = ssh_catalog_gpd.index.tolist().index(idx_arbitrary)
         print(irow+1, end=" ")
-        ds = retrieve_data_func(row, dir_output, time_min=time_min, time_max=time_max, **kwargs)
+        ds = retrieve_data_func(row, time_min=time_min, time_max=time_max, **kwargs)
         if ds is None:
             print("[NODATA] ",end="")
             continue
@@ -1062,11 +1144,13 @@ def ssh_retrieve_data(ssh_catalog_gpd, dir_output, time_min=None, time_max=None,
                              source=row["source"])
         
         ds["waterlevel"] = ds["waterlevel"].astype("float32")
-        _make_hydrotools_consistent(ds)
+        ds = _make_hydrotools_consistent(ds)
         
         stat_name = ds.attrs["station_name_unique"]
         file_out = os.path.join(dir_output, f"{stat_name}.nc")
-        ds.to_netcdf(file_out)
+        # format NETCDF4_CLASSIC significantly reduces netcdf file size
+        # in case of <U1 and <U2 variables
+        ds.to_netcdf(file_out, format="NETCDF4_CLASSIC")
         del ds
     print()
 
@@ -1086,13 +1170,6 @@ def ssh_catalog_tokmlfile(ssc_catalog_gpd, file_kml):
     """
     converts a ssh_catalog to a kml file for easy visualisation in google earth
     """
-    # Enable fiona driver
-    # TODO: gpd sometimes fails with "AttributeError: 'NoneType' object has no attribute 'drvsupport'" 
-    # gpd.io.file.fiona.drvsupport.supported_drivers['KML'] = 'rw' # 
-    # gpd.io.file.fiona.drvsupport.supported_drivers['LIBKML'] = 'rw'
-    fiona.supported_drivers['KML'] = 'rw'
-    fiona.supported_drivers['LIBKML'] = 'rw'
-    
     #select only names and geometry column to reduce file size
     ssc_catalog_gpd_minimal = ssc_catalog_gpd[["station_name_unique","geometry"]]
     # rename to "name" results in a label in Google Earth

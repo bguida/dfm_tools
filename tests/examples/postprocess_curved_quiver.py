@@ -15,7 +15,7 @@ import dfm_tools as dfmt
 
 dir_output = '.'
 
-mode = 'gtsm'
+mode = 'testdata'
 if mode=='testdata':
     x = np.linspace(-4,4,120)
     y = np.linspace(-3,3,100)
