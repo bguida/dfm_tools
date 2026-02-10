@@ -12,21 +12,17 @@ import shutil
 import subprocess
 import sys
 from requests import HTTPError
-<<<<<<< HEAD
-=======
+
 from requests.exceptions import SSLError
 import logging
->>>>>>> bc4d8d3a347eacd2009fab8008430c2d1925250c
 
 __all__ = [
     "download_ERA5",
     "download_CMEMS",
-<<<<<<< HEAD
     "download_MED_CMEMS",
     "download_OPeNDAP",
 ]
 
-logger = logging.getLogger(__name__)
 
 COPERNICUSMARINE_OPTIMIZE_ARGS = dict(
     # speed up copernicusmarine.open_dataset() with the following arguments
@@ -41,7 +37,6 @@ COPERNICUSMARINE_OPTIMIZE_ARGS = dict(
     coordinates_selection_method='outside',
 )
 
->>>>>>> bc4d8d3a347eacd2009fab8008430c2d1925250c
 
 def download_ERA5(varkey,
                   longitude_min, longitude_max, latitude_min, latitude_max, 
