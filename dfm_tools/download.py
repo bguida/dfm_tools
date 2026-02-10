@@ -342,15 +342,13 @@ def download_MED_CMEMS(varkey,
                 dataset_perperiod.to_netcdf(output_filename)
 
 def copernicusmarine_get_product(date_min, date_max, vartype):
-<<<<<<< HEAD
-=======
+
     """
     retrieve the time extents of reanalysis and forecast products. The time
     extents of phy and bio can be different, so they have to be retrieved for
     both.
     """
     
->>>>>>> bc4d8d3a347eacd2009fab8008430c2d1925250c
     assert vartype in ['phy','bio']
     
     # the time extents between phy and bio can be different so we have to retrieve them both
