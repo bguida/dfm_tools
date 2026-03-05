@@ -49,44 +49,48 @@ def reproject_ERA5(ds, variable, crs):
     lon = ds["longitude"].values
     lat = ds["latitude"].values
 
+
     # mesh of original grid cell centers
     lon2d, lat2d = np.meshgrid(lon, lat)
 
     # transform all points to UTM
     transformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
     x2d, y2d = transformer.transform(lon2d, lat2d)
-
-    z = ds[variable].values
-
-    # --- define a regular UTM target grid ---
     # get bounds UTM
     xmin, xmax, ymin, ymax = x2d.min(), x2d.max(), y2d.min(), y2d.max()
-
     # choose resolution in meters (pick something near your source spacing)
     # e.g. 50 m or 100 m depending on dataset resolution
-    dx = (xmax-xmin)/(lon.shape[0] -1)
+    dx = (xmax-xmin)/(lon.shape[0]-1)
     dy = (ymax-ymin)/(lat.shape[0] -1)
-
     x_new = np.arange(xmin, xmax + dx, dx)
     y_new = np.arange(ymin, ymax + dy, dy)
     Xn, Yn = np.meshgrid(x_new, y_new)
 
-    # --- interpolate ---
-    points = np.column_stack([x2d.ravel(), y2d.ravel()])
-    values = z.ravel()
+    Zn_list = []
+    for t in ds.time:
+        z = ds[variable].sel(time=t).values
+        
+        # --- interpolate ---
+        points = np.column_stack([x2d.ravel(), y2d.ravel()])
+        values = z.ravel()
+        
+        Zn_t = griddata(points, values, (Xn, Yn), method="nearest")  # "nearest" or "cubic" optional
+        Zn_list.append(Zn_t)
 
-    Zn = griddata(points, values, (Xn, Yn), method="linear")  # "nearest" or "cubic" optional
+
+    # Convert to 3D NumPy array: (time, y, x)
+    Zn_arr = np.stack(Zn_list, axis=0).astype("float32")
 
     # --- build xarray DataArray in UTM ---
-    ds_utm = xr.DataArray(
-        Zn.astype("float32"),
-        dims=("latitude", "longitude"),
+    data_utm = xr.DataArray(
+        Zn_arr.astype("float32"),
+        dims=("time", "latitude", "longitude"),
         coords={"longitude": x_new, "latitude": y_new},
-        name=variable
+        name="msl"
     )
 
     # (optional) add CRS metadata for your own bookkeeping
-    ds_utm.attrs["crs"] = crs
+    data_utm.attrs["crs"] = crs
     return ds_utm
 def preprocess_hisnc(ds):
     """
