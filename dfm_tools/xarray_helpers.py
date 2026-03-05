@@ -86,7 +86,7 @@ def reproject_ERA5(ds, variable, crs):
         Zn_arr.astype("float32"),
         dims=("time", "latitude", "longitude"),
         coords={"longitude": x_new, "latitude": y_new},
-        name="msl"
+        name=variable
     )
 
     # (optional) add CRS metadata for your own bookkeeping
