@@ -303,7 +303,6 @@ def merge_meteofiles(file_nc:str,
         data_xr = data_xr.set_crs(4326).to_crs(crs)
     return data_xr
 
-
 def convert_meteo_units(data_xr):
     #TODO: check conversion implementation with hydro_tools\ERA5\ERA52DFM.py
     #TODO: assert old unit instead of always converting
