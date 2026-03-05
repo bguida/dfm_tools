@@ -6,6 +6,8 @@ import glob
 import pandas as pd
 import logging
 import numpy as np
+import rioxarray # for the extension to load
+import rasterio
 from dfm_tools.interpolate_grid2bnd import _ds_sel_time_outside
 from scipy.ndimage import distance_transform_edt
     
@@ -187,7 +189,6 @@ def preprocess_ERA5(ds):
 def merge_meteofiles(file_nc:str,
                      time_slice:slice,
                      preprocess = None,
-                     crs = None,
                      **kwargs) -> xr.Dataset:
     """
     Merging of meteo files. Variables/coordinates x/y and lon/lat are renamed
@@ -297,10 +298,6 @@ def merge_meteofiles(file_nc:str,
             data_xr['longitude'].attrs
             )
         data_xr = data_xr.sortby(data_xr['longitude'])
-    
-    # BG 5/03/2026 reproject to desired crs/gs
-    if crs:
-        data_xr = data_xr.set_crs(4326).to_crs(crs)
     return data_xr
 
 def convert_meteo_units(data_xr):
