@@ -251,6 +251,7 @@ def preprocess_merge_meteofiles_era5(
         dir_data,
         dir_output,
         time_slice,
+        crs,
         ):
     """
     Merge ERA5 data per variable for the requested time period.
