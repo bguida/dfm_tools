@@ -302,6 +302,7 @@ def preprocess_merge_meteofiles_era5(
             file_nc=file_nc,
             time_slice=time_slice, 
             preprocess=dfmt.preprocess_ERA5,
+            crs,
             )
         
         # check if the variable is present in merged netcdf. This could go wrong for
