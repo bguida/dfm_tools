@@ -64,7 +64,8 @@ def reproject_ERA5(ds, variable, crs):
 
     # choose resolution in meters (pick something near your source spacing)
     # e.g. 50 m or 100 m depending on dataset resolution
-    dx = dy = 30000
+    dx = (xmax-xmin)/(lon.shape[0] -1)
+    dy = (ymax-ymin)/(lat.shape[0] -1)
 
     x_new = np.arange(xmin, xmax + dx, dx)
     y_new = np.arange(ymin, ymax + dy, dy)
