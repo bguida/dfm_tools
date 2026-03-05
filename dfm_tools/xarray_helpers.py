@@ -14,6 +14,7 @@ __all__ = [
     "preprocess_ERA5",
     "merge_meteofiles",
     "Dataset_varswithdim",
+    "reproject_ERA5"
 ]
 
 logger = logging.getLogger(__name__)
