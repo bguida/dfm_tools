@@ -297,13 +297,13 @@ def preprocess_merge_meteofiles_era5(
         
         fn_match_pattern = f'era5_{varkey}_*.nc'
         file_nc = os.path.join(dir_data, fn_match_pattern)
-        
+
         ds = dfmt.merge_meteofiles(
             file_nc=file_nc,
             time_slice=time_slice, 
             preprocess=dfmt.preprocess_ERA5)
+        print(ds)
         ## reprojection + interp for CRS UTM
-        # --- 1:load ---
         ds = dfmt.reproject_ERA5(ds, varkey, crs)
         print(ds)
         ##
