@@ -6,8 +6,6 @@ import glob
 import pandas as pd
 import logging
 import numpy as np
-import rioxarray # for the extension to load
-import rasterio
 from dfm_tools.interpolate_grid2bnd import _ds_sel_time_outside
 from scipy.ndimage import distance_transform_edt
     
