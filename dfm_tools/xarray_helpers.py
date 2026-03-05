@@ -55,7 +55,7 @@ def reproject_ERA5(ds, variable, crs):
     transformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
     x2d, y2d = transformer.transform(lon2d, lat2d)
 
-    z = ds.values
+    z = ds.{variable}.values
 
     # --- define a regular UTM target grid ---
     # get bounds UTM
