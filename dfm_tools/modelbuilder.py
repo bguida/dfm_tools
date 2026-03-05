@@ -251,6 +251,7 @@ def preprocess_merge_meteofiles_era5(
         dir_data,
         dir_output,
         time_slice,
+        crs
         ):
     """
     Merge ERA5 data per variable for the requested time period.
@@ -301,6 +302,12 @@ def preprocess_merge_meteofiles_era5(
             file_nc=file_nc,
             time_slice=time_slice, 
             preprocess=dfmt.preprocess_ERA5)
+        ## reprojection + interp for CRS UTM
+        # --- 1:load ---
+        ds = dfmt.reproject_ERA5(ds, varkey, crs)
+
+        ##
+        
         
         # check if the variable is present in merged netcdf. This could go wrong for
         # avg_tprate and avg_ie that are renamed to mtpr and mer in preprocess_ERA5

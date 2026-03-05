@@ -41,7 +41,49 @@ def file_to_list(file_nc):
             )
     return file_nc_list
 
+def reproject_ERA5(ds, variable, crs):
+    #code
+    lon = ds["longitude"].values
+    lat = ds["latitude"].values
 
+    # mesh of original grid cell centers
+    lon2d, lat2d = np.meshgrid(lon, lat)
+
+    # transform all points to UTM
+    transformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+    x2d, y2d = transformer.transform(lon2d, lat2d)
+
+    z = ds.values
+
+    # --- define a regular UTM target grid ---
+    # get bounds UTM
+    xmin, xmax, ymin, ymax = x2d.min(), x2d.max(), y2d.min(), y2d.max()
+
+    # choose resolution in meters (pick something near your source spacing)
+    # e.g. 50 m or 100 m depending on dataset resolution
+    dx = dy = 30000
+
+    x_new = np.arange(xmin, xmax + dx, dx)
+    y_new = np.arange(ymin, ymax + dy, dy)
+    Xn, Yn = np.meshgrid(x_new, y_new)
+
+    # --- interpolate ---
+    points = np.column_stack([x2d.ravel(), y2d.ravel()])
+    values = z.ravel()
+
+    Zn = griddata(points, values, (Xn, Yn), method="linear")  # "nearest" or "cubic" optional
+
+    # --- build xarray DataArray in UTM ---
+    ds_utm = xr.DataArray(
+        Zn.astype("float32"),
+        dims=("latitude", "longitude"),
+        coords={"longitude": x_new, "latitude": y_new},
+        name=variable
+    )
+
+    # (optional) add CRS metadata for your own bookkeeping
+    ds_utm.attrs["crs"] = crs
+    return ds_utm
 def preprocess_hisnc(ds):
     """
     Look for dim/coord combination and use this for Dataset.set_index(), to enable
