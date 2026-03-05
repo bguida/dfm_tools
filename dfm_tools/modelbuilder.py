@@ -305,7 +305,7 @@ def preprocess_merge_meteofiles_era5(
         ## reprojection + interp for CRS UTM
         # --- 1:load ---
         ds = dfmt.reproject_ERA5(ds, varkey, crs)
-
+        print(ds)
         ##
         
         
