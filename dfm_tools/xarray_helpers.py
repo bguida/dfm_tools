@@ -82,7 +82,7 @@ def reproject_ERA5(ds, variable, crs):
     Zn_arr = np.stack(Zn_list, axis=0).astype("float32")
 
     # --- build xarray DataArray in UTM ---
-    data_utm = xr.DataArray(
+    ds_utm = xr.DataArray(
         Zn_arr.astype("float32"),
         dims=("time", "latitude", "longitude"),
         coords={"longitude": x_new, "latitude": y_new},
@@ -90,7 +90,7 @@ def reproject_ERA5(ds, variable, crs):
     )
 
     # (optional) add CRS metadata for your own bookkeeping
-    data_utm.attrs["crs"] = crs
+    ds_utm.attrs["crs"] = crs
     return ds_utm
 def preprocess_hisnc(ds):
     """
