@@ -107,81 +107,226 @@ def file_to_list(file_nc):
 
 def reproject_ERA5(ds, variable, crs):
     """
-    Reprojects an ERA5 variable into a projected CRS while keeping:
-    - original longitude/latitude coordinates (degrees)
-    - projected x/y coordinates (meters)
-    - latitude/longitude as dimension names
+    Reproject a 2D ERA5 variable from lat/lon (EPSG:4326) to a target projected CRS.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Input dataset with coordinates 'longitude', 'latitude' and a 'time' dimension.
+        Expected variable dims: ('time', 'latitude', 'longitude').
+    variable : str
+        Name of the 2D variable inside ds to reproject.
+    crs : str
+        Target CRS in PROJ or EPSG form, e.g. 'EPSG:32632'.
+
+    Returns
+    -------
+    xarray.Dataset
+        Dataset with:
+        - data variable <variable> on dims ('time','y','x'),
+        - 1D coords: time, x, y
+        - 2D coords: longitude(y,x), latitude(y,x)
+        - 'time' coordinate attributes copied exactly from input (including standard_name, long_name, units)
+        - CF-friendly attributes for x, y, longitude, latitude
+        - global attributes preserved and augmented with CRS note.
     """
 
-    # Original coords
-    lon = ds["longitude"].values
-    lat = ds["latitude"].values
+    # --- Validate inputs ---
+    if "longitude" not in ds.coords or "latitude" not in ds.coords:
+        raise ValueError("Dataset must have 'longitude' and 'latitude' coordinates.")
+    if "time" not in ds.dims and "time" not in ds.coords:
+        raise ValueError("Dataset must have a 'time' dimension/coordinate.")
+    if variable not in ds.data_vars:
+        raise ValueError(f"Variable '{variable}' not found in dataset.")
+
+    # --- Source grid (ERA5) ---
+    lon = ds["longitude"].values  # 1D
+    lat = ds["latitude"].values   # 1D
     lon2d, lat2d = np.meshgrid(lon, lat)
 
-    # Transform to projected CRS
-    transformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
-    x2d, y2d = transformer.transform(lon2d, lat2d)
+    # --- Build transformers ---
+    fwd = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+    inv = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
 
-    # Define new projected grid (x/y)
-    xmin, xmax = x2d.min(), x2d.max()
-    ymin, ymax = y2d.min(), y2d.max()
+    # Project source grid to target CRS
+    x2d, y2d = fwd.transform(lon2d, lat2d)
 
-    dx = (xmax - xmin) / (lon.shape[0] - 1)
-    dy = (ymax - ymin) / (lat.shape[0] - 1)
+    # --- Define new regular grid in target CRS ---
+    xmin, xmax = np.nanmin(x2d), np.nanmax(x2d)
+    ymin, ymax = np.nanmin(y2d), np.nanmax(y2d)
 
-    x_new = np.arange(xmin, xmax + dx, dx)
-    y_new = np.arange(ymin, ymax + dy, dy)
+    nx_src = lon.shape[0]
+    ny_src = lat.shape[0]
+    if nx_src < 2 or ny_src < 2:
+        raise ValueError("Longitude/latitude need at least two points each to determine spacing.")
 
+    dx = (xmax - xmin) / (nx_src - 1)
+    dy = (ymax - ymin) / (ny_src - 1)
+
+    # Build 1D projected coords (clip upper edge slightly to avoid off-by-one expansions)
+    x_new = np.arange(xmin, xmax + 0.5 * dx, dx, dtype="float64")
+    y_new = np.arange(ymin, ymax + 0.5 * dy, dy, dtype="float64")
+
+    # Target grid
     Xn, Yn = np.meshgrid(x_new, y_new)
 
-    # Interpolate for each timestep
-    Zn_list = []
-    points = np.column_stack([x2d.ravel(), y2d.ravel()])
+    # Geolocate the target grid (2D lon/lat)
+    lon_new, lat_new = inv.transform(Xn, Yn)
 
-    for t in ds.time:
-        z = ds[variable].sel(time=t).values
+    # --- Interpolate onto new grid for each time slice ---
+    points = np.column_stack([x2d.ravel(), y2d.ravel()])
+    interp_method = "nearest"  # keep consistent with original
+    Zn_list = []
+
+    for t in ds["time"].values:
+        z = ds[variable].sel(time=t).values  # shape (lat, lon)
         values = z.ravel()
-        Zn_t = griddata(points, values, (Xn, Yn), method="nearest")
+        Zn_t = griddata(points, values, (Xn, Yn), method=interp_method)
         Zn_list.append(Zn_t.astype("float32"))
 
-    Zn_arr = np.stack(Zn_list, axis=0)
+    Zn_arr = np.stack(Zn_list, axis=0)  # (time, y, x)
 
-    # Build output dataset
-    ds_utm = xr.Dataset(
-        {
-            variable: xr.DataArray(
-                Zn_arr,
-                dims=("time", "projected_y_coordinate", "projected_x_coordinate"),
-                coords={
-                    "time": ds.time.values,
-                    "projected_y_coordinate": y_new,       # projected Y (meters)
-                    "projected_x_coordinate": x_new       # projected X (meters)
-                },
-                attrs=ds[variable].attrs,
-            )
+    # --- Assemble output ---
+    data_da = xr.DataArray(
+        Zn_arr,
+        dims=("time", "y", "x"),
+        coords={
+            "time": ds["time"].values,
+            "x": x_new,
+            "y": y_new,
+            "longitude": (("y", "x"), lon_new.astype("float64")),
+            "latitude":  (("y", "x"), lat_new.astype("float64")),
         },
-        attrs=ds.attrs.copy()
+        attrs=ds[variable].attrs.copy(),
+        name=variable
     )
+    ds_utm = xr.Dataset({variable: data_da}, attrs=ds.attrs.copy())
 
-    # --- Add BOTH coordinate systems ---
+    # --- Copy 'time' attributes exactly from the source ---
+    # This preserves standard_name, long_name, units (and any others) from the origin ds.
+    ds_utm["time"].attrs = ds["time"].attrs.copy()
 
-    # Geographic coordinates (broadcasted to match shape)
-    ds_utm["latitude"] = (("latitude",), lat)
-    ds_utm["longitude"] = (("longitude",), lon)
+    # --- Set projected and geographic coordinate attributes ---
+    # Try to derive linear units from CRS; default to meters.
+    try:
+        crs_obj = CRS.from_user_input(crs)
+        # For most projected CRS the first 2 axes are easting/northing with units
+        axis_units = [ai.unit_name for ai in (crs_obj.axis_info or [])]
+        x_units = axis_units[0] if axis_units else "m"
+        y_units = axis_units[1] if len(axis_units) > 1 else x_units
+        # Normalize common names to CF-style abbreviations where possible
+        unit_alias = {"metre": "m", "meter": "m", "metres": "m", "metres per metre": "m"}
+        x_units = unit_alias.get(x_units, x_units)
+        y_units = unit_alias.get(y_units, y_units)
+    except Exception:
+        x_units = y_units = "m"
 
-    # Projected coordinates (already dims)
-    ds_utm["projected_x_coordinate"] = ("projected_x_coordinate", x_new)
-    ds_utm["projected_y_coordinate"] = ("projected_y_coordinate", y_new)
+    ds_utm["x"].attrs.update({
+        "standard_name": "projection_x_coordinate",
+        "long_name": "x coordinate of projection",
+        "units": x_units,
+    })
+    ds_utm["y"].attrs.update({
+        "standard_name": "projection_y_coordinate",
+        "long_name": "y coordinate of projection",
+        "units": y_units,
+    })
+    ds_utm["longitude"].attrs.update({
+        "standard_name": "longitude",
+        "long_name": "longitude coordinate",
+        "units": "degrees_east",
+    })
+    ds_utm["latitude"].attrs.update({
+        "standard_name": "latitude",
+        "long_name": "latitude coordinate",
+        "units": "degrees_north",
+    })
 
-    # Metadata note
+    # --- Global attrs & CRS note ---
     ds_utm.attrs["crs"] = crs
     ds_utm.attrs["reprojection_note"] = (
-        f"Variable '{variable}' reprojected to {crs}"
-        f"projected_y_coordinate/projected_x_coordinate dims are {crs} projected"
-        "latitude/longitude dims are latitude_geographic / longitude_geographic."
+        f"Variable '{variable}' reprojected from EPSG:4326 to {crs} using {interp_method} interpolation."
     )
 
     return ds_utm
+
+# def reproject_ERA5(ds, variable, crs):
+    # """
+    # Reprojects an ERA5 variable into a projected CRS while keeping:
+    # - original longitude/latitude coordinates (degrees)
+    # - projected x/y coordinates (meters)
+    # - latitude/longitude as dimension names
+    # """
+
+    # # Original coords
+    # lon = ds["longitude"].values
+    # lat = ds["latitude"].values
+    # lon2d, lat2d = np.meshgrid(lon, lat)
+
+    # # Transform to projected CRS
+    # transformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+    # x2d, y2d = transformer.transform(lon2d, lat2d)
+
+    # # Define new projected grid (x/y)
+    # xmin, xmax = x2d.min(), x2d.max()
+    # ymin, ymax = y2d.min(), y2d.max()
+
+    # dx = (xmax - xmin) / (lon.shape[0] - 1)
+    # dy = (ymax - ymin) / (lat.shape[0] - 1)
+
+    # x_new = np.arange(xmin, xmax + dx, dx)
+    # y_new = np.arange(ymin, ymax + dy, dy)
+
+    # Xn, Yn = np.meshgrid(x_new, y_new)
+
+    # # Interpolate for each timestep
+    # Zn_list = []
+    # points = np.column_stack([x2d.ravel(), y2d.ravel()])
+
+    # for t in ds.time:
+        # z = ds[variable].sel(time=t).values
+        # values = z.ravel()
+        # Zn_t = griddata(points, values, (Xn, Yn), method="nearest")
+        # Zn_list.append(Zn_t.astype("float32"))
+
+    # Zn_arr = np.stack(Zn_list, axis=0)
+
+    # # Build output dataset
+    # ds_utm = xr.Dataset(
+        # {
+            # variable: xr.DataArray(
+                # Zn_arr,
+                # dims=("time", "y", "x"),
+                # coords={
+                    # "time": ds.time.values,
+                    # "projected_y_coordinate": y_new,       # projected Y (meters)
+                    # "projected_x_coordinate": x_new       # projected X (meters)
+                # },
+                # attrs=ds[variable].attrs,
+            # )
+        # },
+        # attrs=ds.attrs.copy()
+    # )
+
+    # # --- Add BOTH coordinate systems ---
+
+    # # Geographic coordinates (broadcasted to match shape)
+    # ds_utm["latitude"] = (("latitude",), lat)
+    # ds_utm["longitude"] = (("longitude",), lon)
+
+    # # Projected coordinates (already dims)
+    # ds_utm["projected_x_coordinate"] = ("projected_x_coordinate", x_new)
+    # ds_utm["projected_y_coordinate"] = ("projected_y_coordinate", y_new)
+
+    # # Metadata note
+    # ds_utm.attrs["crs"] = crs
+    # ds_utm.attrs["reprojection_note"] = (
+        # f"Variable '{variable}' reprojected to {crs}"
+        # f"projected_y_coordinate/projected_x_coordinate dims are {crs} projected"
+        # "latitude/longitude dims are latitude_geographic / longitude_geographic."
+    # )
+
+    # return ds_utm
 def preprocess_hisnc(ds):
     """
     Look for dim/coord combination and use this for Dataset.set_index(), to enable
