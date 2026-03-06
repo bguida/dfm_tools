@@ -94,10 +94,10 @@ def reproject_ERA5(ds, variable, crs):
         {
             variable: xr.DataArray(
                 Zn_arr,
-                dims=("time", "y", "x"),
+                dims=("time", "projection_y_coordinate", "projection_x_coordinate"),
                 coords={"time": ds.time.values,
-                        "x": x_new,
-                        "y": y_new},
+                        "projection_x_coordinate": x_new,
+                        "projection_y_coordinate": y_new},
                 attrs=ds[variable].attrs,  # copy variable attributes
             )
         },
