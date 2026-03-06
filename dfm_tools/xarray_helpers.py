@@ -44,36 +44,94 @@ def file_to_list(file_nc):
             )
     return file_nc_list
 
-import numpy as np
-import xarray as xr
-from pyproj import Transformer
-from scipy.interpolate import griddata
+# def reproject_ERA5(ds, variable, crs):
+    # """
+    # Reproject a 2D ERA5 variable from lat/lon (EPSG:4326)
+    # to a target projected CRS (e.g. UTM).
+
+    # Returns an xarray.Dataset with original attributes preserved.
+    # """
+
+    # # Extract lon/lat
+    # lon = ds["longitude"].values
+    # lat = ds["latitude"].values
+    # lon2d, lat2d = np.meshgrid(lon, lat)
+
+    # # Transform coordinates
+    # transformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+    # x2d, y2d = transformer.transform(lon2d, lat2d)
+
+    # # Compute new grid spacing
+    # xmin, xmax = x2d.min(), x2d.max()
+    # ymin, ymax = y2d.min(), y2d.max()
+    # dx = (xmax - xmin) / (lon.shape[0] - 1)
+    # dy = (ymax - ymin) / (lat.shape[0] - 1)
+
+    # x_new = np.arange(xmin, xmax + dx, dx)
+    # y_new = np.arange(ymin, ymax + dy, dy)
+    # Xn, Yn = np.meshgrid(x_new, y_new)
+
+    # # Interpolate for each timestep
+    # Zn_list = []
+    # points = np.column_stack([x2d.ravel(), y2d.ravel()])
+
+    # for t in ds.time:
+        # z = ds[variable].sel(time=t).values
+        # values = z.ravel()
+        # Zn_t = griddata(points, values, (Xn, Yn), method="nearest")
+        # Zn_list.append(Zn_t.astype("float32"))
+
+    # # Build 3D array
+    # Zn_arr = np.stack(Zn_list, axis=0)
+
+    # # --- Build Dataset (not DataArray) ---
+    # ds_utm = xr.Dataset(
+        # {
+            # variable: xr.DataArray(
+                # Zn_arr,
+                # dims=("time", "projection_y_coordinate", "projection_x_coordinate"),
+                # coords={"time": ds.time.values,
+                        # "projection_x_coordinate": x_new,
+                        # "projection_y_coordinate": y_new},
+                # attrs=ds[variable].attrs,  # copy variable attributes
+            # )
+        # },
+        # attrs=ds.attrs.copy()  # copy global dataset attributes
+    # )
+
+    # # Add CRS information & note
+    # ds_utm.attrs["crs"] = crs
+    # ds_utm.attrs["reprojection_note"] = f"Variable '{variable}' reprojected to {crs}"
+
+    # return ds_utm
 
 def reproject_ERA5(ds, variable, crs):
     """
-    Reproject a 2D ERA5 variable from lat/lon (EPSG:4326)
-    to a target projected CRS (e.g. UTM).
-
-    Returns an xarray.Dataset with original attributes preserved.
+    Reprojects an ERA5 variable into a projected CRS while keeping:
+    - original longitude/latitude coordinates (degrees)
+    - projected x/y coordinates (meters)
+    - latitude/longitude as dimension names
     """
 
-    # Extract lon/lat
+    # Original coords
     lon = ds["longitude"].values
     lat = ds["latitude"].values
     lon2d, lat2d = np.meshgrid(lon, lat)
 
-    # Transform coordinates
+    # Transform to projected CRS
     transformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
     x2d, y2d = transformer.transform(lon2d, lat2d)
 
-    # Compute new grid spacing
+    # Define new projected grid (x/y)
     xmin, xmax = x2d.min(), x2d.max()
     ymin, ymax = y2d.min(), y2d.max()
+
     dx = (xmax - xmin) / (lon.shape[0] - 1)
     dy = (ymax - ymin) / (lat.shape[0] - 1)
 
     x_new = np.arange(xmin, xmax + dx, dx)
     y_new = np.arange(ymin, ymax + dy, dy)
+
     Xn, Yn = np.meshgrid(x_new, y_new)
 
     # Interpolate for each timestep
@@ -86,27 +144,42 @@ def reproject_ERA5(ds, variable, crs):
         Zn_t = griddata(points, values, (Xn, Yn), method="nearest")
         Zn_list.append(Zn_t.astype("float32"))
 
-    # Build 3D array
     Zn_arr = np.stack(Zn_list, axis=0)
 
-    # --- Build Dataset (not DataArray) ---
+    # Build output dataset
     ds_utm = xr.Dataset(
         {
             variable: xr.DataArray(
                 Zn_arr,
-                dims=("time", "projection_y_coordinate", "projection_x_coordinate"),
-                coords={"time": ds.time.values,
-                        "projection_x_coordinate": x_new,
-                        "projection_y_coordinate": y_new},
-                attrs=ds[variable].attrs,  # copy variable attributes
+                dims=("time", "projected_y_coordinate", "projected_x_coordinate"),
+                coords={
+                    "time": ds.time.values,
+                    "projected_y_coordinate": y_new,       # projected Y (meters)
+                    "projected_x_coordinate": x_new       # projected X (meters)
+                },
+                attrs=ds[variable].attrs,
             )
         },
-        attrs=ds.attrs.copy()  # copy global dataset attributes
+        attrs=ds.attrs.copy()
     )
 
-    # Add CRS information & note
+    # --- Add BOTH coordinate systems ---
+
+    # Geographic coordinates (broadcasted to match shape)
+    ds_utm["latitude"] = (("latitude",), lat)
+    ds_utm["longitude"] = (("longitude",), lon)
+
+    # Projected coordinates (already dims)
+    ds_utm["projected_x_coordinate"] = ("projected_x_coordinate", x_new)
+    ds_utm["projected_y_coordinate"] = ("projected_y_coordinate", y_new)
+
+    # Metadata note
     ds_utm.attrs["crs"] = crs
-    ds_utm.attrs["reprojection_note"] = f"Variable '{variable}' reprojected to {crs}"
+    ds_utm.attrs["reprojection_note"] = (
+        f"Variable '{variable}' reprojected to {crs}"
+        f"projected_y_coordinate/projected_x_coordinate dims are {crs} projected"
+        "latitude/longitude dims are latitude_geographic / longitude_geographic."
+    )
 
     return ds_utm
 def preprocess_hisnc(ds):
